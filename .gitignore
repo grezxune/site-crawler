@@ -1,0 +1,6 @@
+node_modules/
+dist/
+
+# Crawl output. Each run writes to runs/<site name>/.
+runs/*
+!runs/.gitkeep

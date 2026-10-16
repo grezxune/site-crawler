@@ -1,0 +1,28 @@
+{
+  "name": "site-crawler",
+  "version": "0.1.0",
+  "description": "Crawl every page on one website, save the HTML, and get a site health report.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/grezxune/site-crawler.git"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "crawl": "bun run src/cli.ts",
+    "report": "bun run src/report-cli.ts",
+    "build": "bun build src/cli.ts src/report-cli.ts --target=bun --outdir=dist",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "test": "bun test",
+    "check": "bun run typecheck && bun run lint && bun test && bun run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.4.3",
+    "eslint": "^10.13.0",
+    "typescript": "^6",
+    "typescript-eslint": "^8.71.2"
+  }
+}
