@@ -1,3 +1,9 @@
+import { collapse, decodeEntities } from "./entities.ts";
+import { apiUrlsInScript } from "./found-files.ts";
+
+// Inline script text kept per page for the API-host check. Larger scripts are cut here.
+const MAX_INLINE_SCRIPT = 256 * 1024;
+
 const LINK_SELECTORS: [selector: string, attribute: string][] = [
   ["a[href]", "href"],
   ["area[href]", "href"],
@@ -42,8 +48,13 @@ export interface PageAnalysis {
   resources: string[];
   images: number;
   imagesMissingAlt: number;
-  /** Frames and iframes. Their content lives at another URL, often another site. */
+  /** Frames and iframes with a source. Their content lives at another URL, often another site. */
   frames: number;
+  frameSrcs: string[];
+  /** External script URLs. */
+  scripts: string[];
+  /** URLs on API hosts or paths named in inline scripts, a sign the page loads data with JavaScript. */
+  inlineApiUrls: string[];
   /** Links that go nowhere: `href="#"` or `javascript:`. */
   deadLinks: number;
   /** Visible body text, one entry per block element, whitespace collapsed. */
@@ -54,8 +65,8 @@ export interface PageAnalysis {
 export async function analyzePage(html: string): Promise<PageAnalysis> {
   const page: PageAnalysis = {
     title: null, metaDescription: null, metaRobots: null, canonical: null, lang: null, generator: null,
-    h1: [], base: null, links: [], resources: [], images: 0, imagesMissingAlt: 0, frames: 0, deadLinks: 0,
-    textBlocks: [],
+    h1: [], base: null, links: [], resources: [], images: 0, imagesMissingAlt: 0, frames: 0, frameSrcs: [],
+    scripts: [], inlineApiUrls: [], deadLinks: 0, textBlocks: [],
   };
   const attr = (element: HTMLRewriterTypes.Element, name: string): string | null => {
     const value = element.getAttribute(name);
@@ -149,18 +160,24 @@ export async function analyzePage(html: string): Promise<PageAnalysis> {
       },
     });
 
-  for (const selector of ["frame", "iframe"]) {
-    rewriter = rewriter.on(selector, {
-      element: () => {
-        page.frames++;
-      },
-    });
-  }
+  let inlineScript = false;
+  let scriptText = "";
+  rewriter = rewriter.on("script", {
+    element: (e) => {
+      const src = attr(e, "src");
+      inlineScript = !src;
+      if (src) page.scripts.push(src);
+    },
+    text: (t) => {
+      if (inlineScript && scriptText.length < MAX_INLINE_SCRIPT) scriptText += t.text;
+    },
+  });
   for (const [selector, name] of LINK_SELECTORS) {
     rewriter = rewriter.on(selector, {
       element: (e) => {
         const value = attr(e, name);
         if (!value) return;
+        if (name === "src") page.frameSrcs.push(value);
         if (value === "#" || /^javascript:/i.test(value)) page.deadLinks++;
         else page.links.push(value);
       },
@@ -177,20 +194,7 @@ export async function analyzePage(html: string): Promise<PageAnalysis> {
 
   await rewriter.transform(new Response(html)).text();
   flush();
+  page.frames = page.frameSrcs.length;
+  page.inlineApiUrls = apiUrlsInScript(scriptText);
   return page;
-}
-
-const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
-
-/** HTMLRewriter returns raw attribute and text content, so entities must be decoded here. */
-export function decodeEntities(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, body: string) => {
-    if (body[0] !== "#") return NAMED_ENTITIES[body.toLowerCase()] ?? entity;
-    const code = body[1] === "x" || body[1] === "X" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
-    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : entity;
-  });
-}
-
-function collapse(text: string): string {
-  return decodeEntities(text).replace(/\s+/g, " ").trim();
 }

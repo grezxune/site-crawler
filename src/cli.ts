@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { crawl } from "./crawler.ts";
 import type { PageOutcome } from "./manifest.ts";
+import type { RenderRecord } from "./render.ts";
 import { printReportSummary } from "./report-cli.ts";
 import { normalizeUrl, siteDirName } from "./urls.ts";
 import { writeReport } from "./write-report.ts";
@@ -24,8 +25,19 @@ Options:
   --check-links        After the crawl, check every linked file and external link
                        with one HEAD request each (a 1-byte GET confirms any error)
   --max-link-checks <n>  Most links to check (default: 2000)
+  --render             Also load each page in a local headless Chrome and record
+                       the links and file URLs its scripts add. Page scripts may
+                       reach other hosts. Images, fonts, media, and files are blocked.
+  --chrome <path>      Browser for --render (default: CHROME_PATH or a found install)
   --ignore-robots      Do not read robots.txt
   -h, --help           Show this help`;
+
+function renderSummary(render: RenderRecord | undefined): string {
+  if (!render) return "";
+  if (!render.ok) return `  render failed: ${render.error ?? "unknown error"}`;
+  const wait = render.settled ? "" : ", still loading at timeout";
+  return `  render: ${render.files.length} files, ${render.links.length} links, ${render.apiCalls.length} API calls${wait}`;
+}
 
 function positiveInt(value: string | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback;
@@ -47,6 +59,8 @@ async function main(): Promise<void> {
       "ignore-robots": { type: "boolean", default: false },
       "check-links": { type: "boolean", default: false },
       "max-link-checks": { type: "string" },
+      render: { type: "boolean", default: false },
+      chrome: { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -75,6 +89,8 @@ async function main(): Promise<void> {
     userAgent: USER_AGENT,
     checkLinks: values["check-links"],
     maxLinkChecks: positiveInt(values["max-link-checks"], 2000, "max-link-checks"),
+    render: values.render,
+    chromePath: values.chrome,
     onLinkCheck(check) {
       linksChecked++;
       if (check.verdict !== "ok") console.log(`  link ${check.verdict.padEnd(8)} ${check.status ?? check.error ?? ""}  ${check.url}`);
@@ -83,7 +99,7 @@ async function main(): Promise<void> {
     onPage(page, done) {
       const status = page.status ?? "---";
       const detail = page.file ?? page.error ?? page.finalUrl ?? "";
-      console.log(`[${done}] ${status} ${page.outcome.padEnd(16)} ${page.url}  ${detail}`);
+      console.log(`[${done}] ${status} ${page.outcome.padEnd(16)} ${page.url}  ${detail}${renderSummary(page.render)}`);
     },
   });
 
@@ -108,6 +124,8 @@ async function main(): Promise<void> {
 
   printReportSummary(await writeReport(outDir), outDir);
 }
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(130));
 
 main().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : error);

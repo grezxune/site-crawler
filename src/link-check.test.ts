@@ -78,6 +78,7 @@ describe("crawl with --check-links", () => {
       userAgent: "site-crawler/test",
       checkLinks: true,
       maxLinkChecks: 100,
+      render: false,
     });
     report = await writeReport(outDir);
   });

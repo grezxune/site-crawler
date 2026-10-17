@@ -1,4 +1,5 @@
 import { capped, kb, list, table, yesNo } from "./markdown.ts";
+import { linkCheckSection, scriptContentSection } from "./report-sections.ts";
 import type { Report } from "./report.ts";
 import { MAX_DEPTH, STALE_DAYS, THIN_WORDS } from "./report-checks.ts";
 
@@ -39,6 +40,7 @@ export function renderMarkdown(report: Report): string {
     ["Broken pages", "broken-pages", report.broken.length],
     ["Broken files and external links", "broken-files-and-external-links",
       checks.checked ? checks.counts.broken + checks.counts.failed : "not checked"],
+    ["Pages with script-loaded content", "content-loaded-by-javascript", report.scriptContent.pages.length],
     ["URLs that redirect", "redirects", report.redirects.length],
     ["Likely useless pages", "possibly-useless-pages", report.likelyUseless.length],
     [`Thin pages (under ${THIN_WORDS} words)`, "thin-pages", report.thin.length],
@@ -60,30 +62,8 @@ export function renderMarkdown(report: Report): string {
     b.linkedFrom.length ? paths(b.linkedFrom, 3) : "nothing crawled", yesNo(b.inSitemap),
   ])));
 
-  const skippedNote = checks.skipped ? ` ${checks.skipped} more were left out by --max-link-checks.` : "";
-  heading("Broken files and external links", checks.checked
-    ? `Checked ${checks.total} linked files and external pages with a HEAD request. Any error was confirmed with a 1-byte GET.${skippedNote}`
-    : "Not checked. Run the crawl with `--check-links` to check every linked file and external page.");
-  if (checks.checked) {
-    add(table(["Result", "Links"], [
-      ["Works", String(checks.counts.ok)],
-      ["Broken (HTTP error)", String(checks.counts.broken)],
-      ["No response (DNS, connection, or timeout)", String(checks.counts.failed)],
-      ["Refused the automated check (401, 403, 429)", String(checks.counts.blocked)],
-    ]));
-    const status = (p: (typeof checks.problems)[number]) => (p.status ? String(p.status) : (p.error ?? "no response"));
-    const broken = checks.problems.filter((p) => p.verdict !== "blocked");
-    const refused = checks.problems.filter((p) => p.verdict === "blocked");
-    if (broken.length) {
-      add(capped(broken, (rows) => table(["URL", "Type", "Status", "Linked from"], rows.map((p) => [
-        path(p.url), p.kind, status(p), paths(p.linkedFrom, 3),
-      ]))));
-    }
-    if (refused.length) {
-      add("These servers refused the check. Open them in a browser to confirm they work.", capped(refused, (rows) =>
-        table(["URL", "Status", "Linked from"], rows.map((p) => [path(p.url), status(p), paths(p.linkedFrom, 3)]))));
-    }
-  }
+  add(...linkCheckSection(report, path));
+  add(...scriptContentSection(report, path));
 
   const slashOnly = report.redirects.filter((r) => r.trailingSlashOnly).length;
   heading("Redirects", "URLs that redirect. Each one costs visitors an extra round trip. Point links at the final URL.");
