@@ -18,7 +18,9 @@ export function printReportSummary(report: Report, outDir: string): void {
     ["orphan pages", report.orphans.length],
     ["stale pages", report.stale.length],
     ["images missing alt text", report.accessibility.imagesMissingAlt],
+    ["pages with script-loaded content", report.scriptContent.pages.length],
   ];
+  if (report.scriptContent.rendered) lines.push(["files found by render", report.scriptContent.totals.files]);
   if (report.linkChecks.checked) {
     const { counts } = report.linkChecks;
     lines.splice(1, 0, ["broken files and external links", counts.broken + counts.failed]);

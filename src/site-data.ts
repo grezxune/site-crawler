@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { analyzePage, type PageAnalysis } from "./html.ts";
 import { type Manifest, type PageRecord, readManifest } from "./manifest.ts";
+import type { RenderRecord } from "./render.ts";
 import { fileExtension, isHostingPath, isSameSite, looksLikePage, normalizeUrl, pageKey, shortHash } from "./urls.ts";
 
 // Text that appears on at least this share of pages is template text: header, menu, footer.
@@ -20,8 +21,13 @@ export interface SavedPage {
   contentHash: string;
   /** Page keys this page links to on the same site, itself excluded. */
   outLinks: Set<string>;
-  /** Distinct files such as PDFs this page links to. */
+  /** Distinct files such as PDFs this page links to, in its HTML or found by render. */
   fileLinks: number;
+  /** Text blocks outside the shared template text. */
+  ownBlocks: string[];
+  render: RenderRecord | null;
+  /** Links in the rendered page that the server HTML did not have. */
+  renderOnlyLinks: string[];
 }
 
 export interface LinkedFile {
@@ -30,6 +36,8 @@ export interface LinkedFile {
   host: string;
   onSite: boolean;
   linkedFrom: Set<string>;
+  /** `html` when a saved page links to it, `render` when the render browser found it. */
+  foundBy: Set<"html" | "render">;
 }
 
 export interface SiteData {
@@ -71,47 +79,57 @@ export async function loadSiteData(outDir: string): Promise<SiteData> {
     const analysis = await analyzePage(await readFile(join(outDir, record.file), "utf8"));
     const page: SavedPage = {
       record, url, key: pageKey(url), analysis, uniqueWords: 0, contentHash: "", outLinks: new Set(), fileLinks: 0,
+      ownBlocks: [], render: record.render ?? null, renderOnlyLinks: [],
     };
-    addLinks(data, page);
+    const base = (analysis.base !== null ? normalizeUrl(analysis.base, url) : null) ?? url;
+    const htmlLinks = analysis.links.flatMap((href) => normalizeUrl(href, base) ?? []);
+    const fileUrls = new Set<string>();
+    addLinks(data, page, htmlLinks, "html", fileUrls);
+    if (page.render) {
+      const inHtml = new Set(htmlLinks.map((link) => link.href));
+      // The browser resolves `href="#"` to the page itself. The HTML analysis drops those, so render does too.
+      page.renderOnlyLinks = page.render.links.filter((href) => !inHtml.has(href) && pageKey(new URL(href)) !== page.key);
+      // Only what the server HTML lacked, so links in both are not counted twice.
+      const found = [...page.renderOnlyLinks, ...page.render.files.map((file) => file.url)];
+      addLinks(data, page, found.flatMap((href) => normalizeUrl(href) ?? []), "render", fileUrls);
+    }
+    page.fileLinks = fileUrls.size;
     data.pages.push(page);
   }
   measureUniqueText(data.pages);
   return data;
 }
 
-function addLinks(data: SiteData, page: SavedPage): void {
-  const { analysis, url } = page;
-  const base = (analysis.base !== null ? normalizeUrl(analysis.base, url) : null) ?? url;
-  const fileUrls = new Set<string>();
-  for (const href of analysis.links) {
-    const link = normalizeUrl(href, base);
-    if (!link || isHostingPath(link)) continue;
+function addLinks(data: SiteData, page: SavedPage, links: URL[], foundBy: "html" | "render", fileUrls: Set<string>): void {
+  const from = page.url.href;
+  for (const link of links) {
+    if (isHostingPath(link)) continue;
     const onSite = isSameSite(link, data.manifest.site);
-
     if (!looksLikePage(link)) {
       const file = data.files.get(link.href) ?? {
-        url: link.href, extension: fileExtension(link.pathname) ?? "", host: link.host, onSite, linkedFrom: new Set(),
+        url: link.href, extension: fileExtension(link.pathname) ?? "", host: link.host, onSite,
+        linkedFrom: new Set<string>(), foundBy: new Set<"html" | "render">(),
       };
-      file.linkedFrom.add(url.href);
+      file.linkedFrom.add(from);
+      file.foundBy.add(foundBy);
       data.files.set(link.href, file);
       fileUrls.add(link.href);
-      addTo(data.outbound, link.href, url.href);
+      addTo(data.outbound, link.href, from);
     } else if (!onSite) {
       const host = link.host.toLowerCase();
       const entry = data.external.get(host) ?? { links: 0, linkedFrom: new Set<string>() };
       entry.links++;
-      entry.linkedFrom.add(url.href);
+      entry.linkedFrom.add(from);
       data.external.set(host, entry);
-      addTo(data.outbound, link.href, url.href);
+      addTo(data.outbound, link.href, from);
     } else {
       const key = pageKey(link);
       if (key === page.key) continue;
       page.outLinks.add(key);
-      addTo(data.inbound, key, url.href);
-      addTo(data.inboundExact, link.href, url.href);
+      addTo(data.inbound, key, from);
+      addTo(data.inboundExact, link.href, from);
     }
   }
-  page.fileLinks = fileUrls.size;
 }
 
 /** Splits each page's text into template text and its own text, then counts and hashes its own. */
@@ -123,6 +141,7 @@ function measureUniqueText(pages: SavedPage[]): void {
   const threshold = Math.max(TEMPLATE_MIN_PAGES, Math.ceil(pages.length * TEMPLATE_SHARE));
   for (const page of pages) {
     const own = page.analysis.textBlocks.filter((block) => (pageCounts.get(block) ?? 0) < threshold);
+    page.ownBlocks = own;
     page.uniqueWords = own.reduce((sum, block) => sum + countWords(block), 0);
     page.contentHash = page.uniqueWords > 0 ? shortHash(own.join("\n")) : "";
   }

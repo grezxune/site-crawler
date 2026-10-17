@@ -1,4 +1,4 @@
-import { decodeEntities } from "./html.ts";
+import { decodeEntities } from "./entities.ts";
 
 const MAX_SITEMAPS = 50;
 const TIMEOUT_MS = 20_000;

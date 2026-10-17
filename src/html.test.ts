@@ -42,4 +42,14 @@ describe("analyzePage", () => {
     expect(page.imagesMissingAlt).toBe(1);
     expect(page.resources).toEqual(["http://x.org/a.png", "b.png", "/app.js", "/s.css"]);
   });
+
+  test("records script sources, frame sources, and API hosts named in inline scripts", async () => {
+    const page = await analyzePage(`<body><script src="https://widgets.example.net/w.js"></script>
+      <script>window.WidgetApi = "https:\\/\\/api.example.net"; var home = "https://example.org/";</script>
+      <iframe src="https://calendar.example.net/embed"></iframe></body>`);
+    expect(page.scripts).toEqual(["https://widgets.example.net/w.js"]);
+    expect(page.frameSrcs).toEqual(["https://calendar.example.net/embed"]);
+    expect(page.frames).toBe(1);
+    expect(page.inlineApiUrls).toEqual(["https://api.example.net/"]);
+  });
 });

@@ -73,6 +73,7 @@ describe("crawl", () => {
       userAgent: "site-crawler/test",
       checkLinks: false,
       maxLinkChecks: 0,
+      render: false,
     });
     report = await writeReport(outDir);
   });

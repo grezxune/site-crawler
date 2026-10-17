@@ -5,7 +5,8 @@ A command-line tool that crawls every page on one website, saves each page's HTM
 ## Stack
 - Bun for the runtime, package manager, and test runner.
 - TypeScript in strict mode.
-- No runtime dependencies. We use Bun's `fetch` and `HTMLRewriter`.
+- No runtime dependencies. We use Bun's `fetch`, `HTMLRewriter`, and `WebSocket`.
+- `--render` drives a locally installed Chrome, Chromium, or Edge over the DevTools Protocol. Never add Puppeteer, Playwright, or a bundled browser.
 - ESLint with typescript-eslint. TypeScript stays on 6.x until typescript-eslint supports 7.
 
 ## Project notes
@@ -16,13 +17,17 @@ A command-line tool that crawls every page on one website, saves each page's HTM
 - "Own words" ignores text blocks that appear on at least half the pages. That template filter drives the thin and duplicate page checks.
 - `HTMLRewriter` returns raw attribute and text content. Decode entities before using either.
 - Many servers answer HEAD wrongly (Google returns 404 for working pages). The link check trusts the ranged GET over HEAD, and treats 401, 403, and 429 as refused, not broken.
+- Render (`src/render.ts`) attaches to iframe targets with flat sessions. Key in-flight requests by request ID alone: a frame's document request starts in the parent session and finishes in the frame's.
+- Render reads file URLs from fetched JSON, not only the rendered DOM. Widgets often fetch every record and display a few.
+- Script-content signals and render files that appear on at least half the pages count as template and are reported once, not per page.
 - `HTMLRewriter` keeps one end-tag handler per element. Register every end-tag action in the single `*` handler in `src/html.ts`.
 
 ## Crawling
 - Crawl one site. Never crawl another host or follow a redirect to one.
-- Request other hosts only through the opt-in `--check-links` step: one HEAD per URL, plus a 1-byte ranged GET when HEAD returns an error. Never download a whole file or crawl from there.
+- With the opt-in `--render` flag, a headless browser loads each page the crawl fetches, and that page's own scripts may request other hosts, such as script CDNs, vendor APIs, and iframes. The crawler never points the browser at another host itself. The browser blocks images, fonts, media, and file links.
+- Request other hosts directly only through the opt-in `--check-links` step: one HEAD per URL, plus a 1-byte ranged GET when HEAD returns an error. Never download a whole file or crawl from there.
 - Respect `robots.txt` and `Crawl-delay` by default. Keep default request rates low.
-- The crawl itself never fetches file links. Save only `text/html` responses.
+- Neither the crawl nor the render browser fetches file links. Render records the file URLs it finds. Save only `text/html` responses.
 
 ## Code
 - Never use `@ts-nocheck`. Fix the types.

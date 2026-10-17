@@ -3,6 +3,7 @@ import {
   clickDepth, findStale, groupBy, LONG_TITLE, PLACEHOLDER, sitemapProblem, summarizeFiles, summarizeLinkChecks,
   THIN_WORDS, toKey, topBy, unique,
 } from "./report-checks.ts";
+import { type ScriptContentReport, summarizeScriptContent } from "./script-content.ts";
 import type { SavedPage, SiteData } from "./site-data.ts";
 import { normalizeUrl, pageKey } from "./urls.ts";
 
@@ -51,6 +52,8 @@ export interface Report {
   performance: { slowest: { url: Url; ms: number }[]; largest: { url: Url; bytes: number }[] };
   files: { total: number; byExtension: Record<string, number>; byHost: Record<string, number>; list: Linked[] };
   external: { host: string; links: number; pages: number }[];
+  /** Pages that load content with JavaScript, and what render found on them. */
+  scriptContent: ScriptContentReport;
   /** Status of linked files and external pages, when the crawl ran with `--check-links`. */
   linkChecks: {
     checked: boolean; total: number; skipped: number; counts: Record<LinkVerdict, number>;
@@ -177,5 +180,6 @@ export function buildReport(data: SiteData): Report {
       .map(([host, e]) => ({ host, links: e.links, pages: e.linkedFrom.size }))
       .sort((a, b) => b.pages - a.pages || a.host.localeCompare(b.host)),
     linkChecks: summarizeLinkChecks(data),
+    scriptContent: summarizeScriptContent(data),
   };
 }
