@@ -60,7 +60,11 @@ export interface SiteData {
 
 /** Loads a crawl's manifest and saved HTML, and builds the link graph the report needs. */
 export async function loadSiteData(outDir: string): Promise<SiteData> {
-  const manifest = await readManifest(outDir);
+  return buildSiteData(outDir, await readManifest(outDir));
+}
+
+/** Builds the link graph from a manifest and the HTML saved beside it. */
+export async function buildSiteData(outDir: string, manifest: Manifest): Promise<SiteData> {
   const start = new URL(manifest.startUrl);
   const recordsByKey = new Map<string, PageRecord>();
   for (const record of manifest.pages) {

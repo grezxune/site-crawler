@@ -13,11 +13,15 @@ export class Frontier {
   private readonly fileOwners = new Map<string, string>();
   private queued = 0;
 
+  /** `savedFiles` maps each page key from the earlier crawl to its file, so a page keeps its path. */
   constructor(
     private readonly site: string,
     private readonly robots: Robots,
     private readonly maxPages: number,
-  ) {}
+    private readonly savedFiles = new Map<string, string>(),
+  ) {
+    for (const [key, file] of savedFiles) this.fileOwners.set(file.toLowerCase(), key);
+  }
 
   /** Queues a same-site page once, unless robots.txt blocks it or the page limit is reached. */
   enqueue(url: URL): void {
@@ -57,7 +61,7 @@ export class Frontier {
   /** The output file for a page, made unique when two URLs map to the same path. */
   claimFile(url: URL): string {
     const key = pageKey(url);
-    let file = urlToFilePath(url);
+    let file = this.savedFiles.get(key) ?? urlToFilePath(url);
     const owner = this.fileOwners.get(file.toLowerCase());
     if (owner !== undefined && owner !== key) file = file.replace(/\.html?$/, `.${shortHash(key)}$&`);
     this.fileOwners.set(file.toLowerCase(), key);

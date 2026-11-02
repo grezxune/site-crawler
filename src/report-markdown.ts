@@ -1,5 +1,5 @@
 import { capped, kb, list, table, yesNo } from "./markdown.ts";
-import { linkCheckSection, scriptContentSection } from "./report-sections.ts";
+import { changesSection, linkCheckSection, scriptContentSection } from "./report-sections.ts";
 import type { Report } from "./report.ts";
 import { MAX_DEPTH, STALE_DAYS, THIN_WORDS } from "./report-checks.ts";
 
@@ -53,8 +53,11 @@ export function renderMarkdown(report: Report): string {
     ["Images missing alt text", "accessibility", a11y.imagesMissingAlt],
     ["Pages with mixed content", "mixed-content", report.mixedContent.length],
     ["Sitemap problems", "sitemap-coverage", coverage.problems.length + coverage.notInSitemap.length],
+    ...(report.changes ? [["Pages no longer linked since the last crawl", "pages-no-longer-linked",
+      report.changes.pages.unlinked.length] as [string, string, number]] : []),
   ];
   add("## Findings", table(["Check", "Count"], findings.map(([label, anchor, n]) => [`[${label}](#${anchor})`, String(n)])));
+  add(...changesSection(report, path));
 
   heading("Broken pages", "Pages that returned an HTTP error or could not be fetched.");
   rowsOrNone(report.broken, (rows) => table(["URL", "Status", "Linked from", "In sitemap"], rows.map((b) => [

@@ -52,6 +52,15 @@ export function findChrome(explicit?: string): string | null {
   return null;
 }
 
+/** Finds and launches a browser for render, or explains how to point at one. */
+export async function startBrowser(chromePath?: string): Promise<Browser> {
+  const executable = findChrome(chromePath);
+  if (executable) return launchBrowser(executable);
+  throw new Error(chromePath
+    ? `No browser found at ${chromePath}.`
+    : "--render needs Chrome, Chromium, or Edge. Install one, or pass --chrome <path> or set CHROME_PATH.");
+}
+
 /** Starts a headless browser with a temporary profile and connects to it over the DevTools Protocol. */
 export async function launchBrowser(executable: string): Promise<Browser> {
   const profile = await mkdtemp(join(tmpdir(), "site-crawler-chrome-"));

@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { Changes, PageChange } from "./changes.ts";
 import type { LinkCheckResult } from "./link-check.ts";
 import type { RenderRecord } from "./render.ts";
 import type { SitemapEntry } from "./sitemap.ts";
@@ -23,6 +24,12 @@ export interface PageRecord {
   ms: number | null;
   /** The `Last-Modified` response header. */
   lastModified: string | null;
+  /** The `ETag` response header. Missing in manifests from before incremental crawls. */
+  etag?: string | null;
+  /** How the saved page compares with the earlier crawl in the same folder. Missing when there was none. */
+  change?: PageChange;
+  /** True when the server answered 304 Not Modified, so the crawl kept the saved copy without downloading it. */
+  notModified?: boolean;
   error?: string;
   /** What the render browser found on this page, when the crawl ran with `render`. */
   render?: RenderRecord;
@@ -59,6 +66,8 @@ export interface Manifest {
   pages: PageRecord[];
   /** Status of linked files and external links. Missing in manifests from before the check existed. */
   linkChecks?: LinkCheckResult;
+  /** What changed since the earlier crawl in the same folder. Missing when there was none. */
+  changes?: Changes;
 }
 
 /** Copies only the settings fields, so extra crawl options never leak into the manifest. */

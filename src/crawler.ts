@@ -1,7 +1,8 @@
 import { Buffer } from "node:buffer";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { type Browser, findChrome, launchBrowser } from "./browser.ts";
+import { type Browser, startBrowser } from "./browser.ts";
+import { recordChanges } from "./changes.ts";
 import { Frontier } from "./frontier.ts";
 import { analyzePage } from "./html.ts";
 import { fetchPage, sleep } from "./http.ts";
@@ -9,6 +10,9 @@ import { checkLinks, type LinkCheck, NOT_CHECKED } from "./link-check.ts";
 import {
   crawlSettings, type CrawlSettings, type Manifest, type PageOutcome, type PageRecord, writeManifest,
 } from "./manifest.ts";
+import {
+  compareWithSaved, conditionalHeaders, loadPreviousRun, readSavedPage, responseFields, savedFiles,
+} from "./previous-run.ts";
 import { renderPage } from "./render.ts";
 import { ALLOW_ALL, loadRobots } from "./robots.ts";
 import { loadSitemap, type Sitemap } from "./sitemap.ts";
@@ -22,6 +26,8 @@ export interface CrawlOptions extends CrawlSettings {
   outDir: string;
   /** Browser executable for `render`. Found automatically when omitted. */
   chromePath?: string;
+  /** Ignore an earlier crawl in `outDir`: fetch every page in full and record no changes. */
+  fresh?: boolean;
   onPage?: (page: PageRecord, done: number) => void;
   onLinkCheck?: (check: LinkCheck) => void;
 }
@@ -39,67 +45,70 @@ export async function crawl(options: CrawlOptions): Promise<Manifest> {
   }
 }
 
-async function startBrowser(chromePath?: string): Promise<Browser> {
-  const executable = findChrome(chromePath);
-  if (executable) return launchBrowser(executable);
-  throw new Error(chromePath
-    ? `No browser found at ${chromePath}.`
-    : "--render needs Chrome, Chromium, or Edge. Install one, or pass --chrome <path> or set CHROME_PATH.");
-}
-
 async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | null): Promise<Manifest> {
   const began = performance.now();
   const site = siteKey(start.host);
   const startKey = pageKey(start);
+  const previous = options.fresh ? null : await loadPreviousRun(options.outDir, site);
   const robots = options.respectRobots ? await loadRobots(start.origin, options.userAgent) : ALLOW_ALL;
   const delayMs = Math.max(options.delayMs, (robots.crawlDelay ?? 0) * 1000);
-  const frontier = new Frontier(site, robots, options.maxPages);
+  const frontier = new Frontier(site, robots, options.maxPages, savedFiles(previous));
   const pages: PageRecord[] = [];
   const startHeaders: Record<string, string> = {};
 
   const processPage = async (url: URL): Promise<PageRecord> => {
     const record: PageRecord = {
       url: url.href, finalUrl: null, status: null, outcome: "failed", file: null,
-      contentType: null, bytes: null, ms: null, lastModified: null,
+      contentType: null, bytes: null, ms: null, lastModified: null, etag: null,
     };
     const requestKey = pageKey(url);
     // Follow a redirect only to this site, and only to a page no other worker has claimed.
     const shouldFollow = (next: URL): boolean =>
       isSameSite(next, site) && (pageKey(next) === requestKey || frontier.claim(pageKey(next)));
+    // Ask for each page only if it changed since the earlier crawl saved it.
+    const headersFor = (next: URL) => conditionalHeaders(previous?.pages.get(pageKey(next)));
     const requestStart = performance.now();
     const elapsed = () => Math.round(performance.now() - requestStart);
 
     try {
-      const { response, finalUrl } = await fetchPage(url, options.userAgent, shouldFollow);
+      const { response, finalUrl } = await fetchPage(url, options.userAgent, shouldFollow, headersFor);
       record.finalUrl = finalUrl.href;
       if (!response) {
         return { ...record, ms: elapsed(), outcome: isSameSite(finalUrl, site) ? "duplicate" : "offsite-redirect" };
       }
-      record.status = response.status;
-      record.contentType = response.headers.get("content-type");
-      record.lastModified = response.headers.get("last-modified");
+      const before = previous?.pages.get(pageKey(finalUrl));
+      // A 304 means the saved copy is current. The crawl keeps it and never downloads the page.
+      const kept = response.status === 304 && before ? before : null;
+      Object.assign(record, responseFields(response, kept));
       if (requestKey === startKey) {
         for (const name of START_HEADERS) {
-          const value = response.headers.get(name);
+          const value = response.headers.get(name) ?? (kept ? previous?.manifest.startHeaders[name] : undefined);
           if (value) startHeaders[name] = value;
         }
       }
-      if (!response.ok) return discard(response, { ...record, ms: elapsed() }, "http-error");
+      if (!response.ok && !kept) return discard(response, { ...record, ms: elapsed() }, "http-error");
       if (!/text\/html|application\/xhtml\+xml/i.test(record.contentType ?? "")) {
         return discard(response, { ...record, ms: elapsed() }, "not-html");
       }
 
-      const html = await response.text();
+      if (kept) await response.body?.cancel();
+      const html = kept ? await readSavedPage(options.outDir, kept) : await response.text();
       record.ms = elapsed();
-      record.bytes = Buffer.byteLength(html);
+      const analysis = await analyzePage(html);
       const file = frontier.claimFile(finalUrl);
-      const path = join(options.outDir, file);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, html);
+      if (previous) record.change = kept ? "unchanged" : await compareWithSaved(options.outDir, before, html, analysis);
+      // An unchanged page keeps its saved file, so a token that differs on every request causes no rewrite.
+      const keepFile = record.change === "unchanged" && file === before?.file;
+      record.bytes = (keepFile ? before?.bytes : null) ?? Buffer.byteLength(html);
+      if (!keepFile) {
+        const path = join(options.outDir, file);
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, html);
+      }
       record.file = file;
       record.outcome = "saved";
 
-      const { base, links } = await analyzePage(html);
+      const { base, links } = analysis;
       const baseUrl = (base !== null ? normalizeUrl(base, finalUrl) : null) ?? finalUrl;
       for (const href of links) {
         const link = normalizeUrl(href, baseUrl);
@@ -130,6 +139,8 @@ async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | n
       if (url) frontier.enqueue(url);
     }
   }
+  // Every page the earlier crawl saved gets checked again, so a page nothing links to anymore is not taken for gone.
+  for (const url of previous?.urls ?? []) frontier.enqueue(url);
 
   let active = 0;
   const worker = async (): Promise<void> => {
@@ -176,6 +187,7 @@ async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | n
     linkChecks,
   };
   await mkdir(options.outDir, { recursive: true });
+  if (previous) manifest.changes = await recordChanges(options.outDir, previous, manifest);
   await writeManifest(options.outDir, manifest);
   return manifest;
 }

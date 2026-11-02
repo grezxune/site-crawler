@@ -1,3 +1,4 @@
+import type { Changes } from "./changes.ts";
 import type { LinkVerdict } from "./link-check.ts";
 import {
   clickDepth, findStale, groupBy, LONG_TITLE, PLACEHOLDER, sitemapProblem, summarizeFiles, summarizeLinkChecks,
@@ -54,6 +55,8 @@ export interface Report {
   external: { host: string; links: number; pages: number }[];
   /** Pages that load content with JavaScript, and what render found on them. */
   scriptContent: ScriptContentReport;
+  /** What changed since the earlier crawl in the same folder. Null when there was none to compare with. */
+  changes: Changes | null;
   /** Status of linked files and external pages, when the crawl ran with `--check-links`. */
   linkChecks: {
     checked: boolean; total: number; skipped: number; counts: Record<LinkVerdict, number>;
@@ -181,5 +184,6 @@ export function buildReport(data: SiteData): Report {
       .sort((a, b) => b.pages - a.pages || a.host.localeCompare(b.host)),
     linkChecks: summarizeLinkChecks(data),
     scriptContent: summarizeScriptContent(data),
+    changes: manifest.changes ?? null,
   };
 }

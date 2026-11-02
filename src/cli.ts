@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import type { Changes } from "./changes.ts";
 import { crawl } from "./crawler.ts";
 import type { PageOutcome } from "./manifest.ts";
 import type { RenderRecord } from "./render.ts";
@@ -29,6 +30,9 @@ Options:
                        the links and file URLs its scripts add. Page scripts may
                        reach other hosts. Images, fonts, media, and files are blocked.
   --chrome <path>      Browser for --render (default: CHROME_PATH or a found install)
+  --fresh              Ignore an earlier crawl in the output folder. Without it, the
+                       crawl asks only for pages that changed, and copies new and
+                       changed pages to changes/<time>/ with a changes.json
   --ignore-robots      Do not read robots.txt
   -h, --help           Show this help`;
 
@@ -37,6 +41,27 @@ function renderSummary(render: RenderRecord | undefined): string {
   if (!render.ok) return `  render failed: ${render.error ?? "unknown error"}`;
   const wait = render.settled ? "" : ", still loading at timeout";
   return `  render: ${render.files.length} files, ${render.links.length} links, ${render.apiCalls.length} API calls${wait}`;
+}
+
+function printChanges(changes: Changes | undefined, outDir: string): void {
+  if (!changes) return;
+  const { pages, files } = changes;
+  const since = changes.since.slice(0, 16).replace("T", " ");
+  if (!changes.dir) {
+    console.log(`  No changes since the crawl on ${since} UTC. ${pages.notModified} of ${pages.unchanged} pages were not downloaded.`);
+    return;
+  }
+  console.log(`  Changes since the crawl on ${since} UTC:`);
+  console.log(`    pages: ${pages.new.length} new, ${pages.changed.length} changed, ${pages.removed.length} removed, ${pages.unchanged} unchanged (${pages.notModified} not downloaded)`);
+  console.log(`    files: ${files.new.length} new, ${files.removed.length} removed`);
+  if (pages.unlinked.length) {
+    console.log(`    ${pages.unlinked.length} pages still load, but no page or the sitemap links to them anymore:`);
+    for (const page of pages.unlinked) console.log(`      ${page.url}`);
+  }
+  if (!changes.sameRender) {
+    console.log("    Only one of the two crawls used --render, so only files the HTML links were compared, and no page was checked for lost links.");
+  }
+  console.log(`    ${resolve(outDir, changes.dir)}`);
 }
 
 function positiveInt(value: string | undefined, fallback: number, name: string): number {
@@ -61,6 +86,7 @@ async function main(): Promise<void> {
       "max-link-checks": { type: "string" },
       render: { type: "boolean", default: false },
       chrome: { type: "string" },
+      fresh: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -91,15 +117,17 @@ async function main(): Promise<void> {
     maxLinkChecks: positiveInt(values["max-link-checks"], 2000, "max-link-checks"),
     render: values.render,
     chromePath: values.chrome,
+    fresh: values.fresh,
     onLinkCheck(check) {
       linksChecked++;
       if (check.verdict !== "ok") console.log(`  link ${check.verdict.padEnd(8)} ${check.status ?? check.error ?? ""}  ${check.url}`);
       else if (linksChecked % 25 === 0) console.log(`  checked ${linksChecked} links`);
     },
     onPage(page, done) {
-      const status = page.status ?? "---";
+      const status = page.notModified ? 304 : (page.status ?? "---");
       const detail = page.file ?? page.error ?? page.finalUrl ?? "";
-      console.log(`[${done}] ${status} ${page.outcome.padEnd(16)} ${page.url}  ${detail}${renderSummary(page.render)}`);
+      const change = page.change ? ` (${page.change})` : "";
+      console.log(`[${done}] ${status} ${page.outcome.padEnd(16)} ${page.url}  ${detail}${change}${renderSummary(page.render)}`);
     },
   });
 
@@ -121,6 +149,7 @@ async function main(): Promise<void> {
     const skipped = result.linkChecks.skipped ? ` ${result.linkChecks.skipped} skipped by --max-link-checks.` : "";
     console.log(`  Checked ${result.linkChecks.checks.length} links: ${summary || "none found"}.${skipped}`);
   }
+  printChanges(result.changes, outDir);
 
   printReportSummary(await writeReport(outDir), outDir);
 }
