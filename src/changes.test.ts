@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
@@ -239,6 +239,19 @@ describe("comparing crawls", () => {
 
     const second = await crawl(options(outDir));
     expect(record(second, "/news")).toMatchObject({ change: "new", file: "news/index.html" });
+  });
+
+  test("moves a page an older crawl saved under changes/", async () => {
+    const outDir = await tempDir();
+    const first = await crawl(options(outDir));
+    const changesPage = first.pages.find((r) => path(r.url) === "/changes");
+    if (changesPage) changesPage.file = "changes/index.html";
+    await mkdir(join(outDir, "changes"), { recursive: true });
+    await writeFile(join(outDir, "changes/index.html"), "<html><body>Saved by an older crawl.</body></html>");
+    await writeFile(join(outDir, "manifest.json"), JSON.stringify(first));
+
+    const second = await crawl(options(outDir));
+    expect(record(second, "/changes")).toMatchObject({ change: "new", file: "changes_/index.html" });
   });
 
   test("only safe validators and paths come from the earlier manifest", () => {

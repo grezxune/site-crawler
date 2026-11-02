@@ -4,7 +4,7 @@ import { type FileEntry, fileEntries, linkedPages, type PageChange } from "./cha
 import { analyzePage, type PageAnalysis } from "./html.ts";
 import { type Manifest, MANIFEST_FILE, type PageRecord, readManifest } from "./manifest.ts";
 import { buildSiteData } from "./site-data.ts";
-import { normalizeUrl, pageKey } from "./urls.ts";
+import { CHANGES_DIR, normalizeUrl, pageKey } from "./urls.ts";
 
 /** What a crawl needs from the earlier crawl in the same folder. */
 export interface PreviousRun {
@@ -48,7 +48,7 @@ export async function loadPreviousRun(outDir: string, site: string): Promise<Pre
     if (!url || !normalizeUrl(record.url)) continue;
     if (record.outcome !== "saved") {
       kept.push(record);
-    } else if (record.file && isSafeFile(record.file) && (await Bun.file(join(outDir, record.file)).exists())) {
+    } else if (record.file && isReusableFile(record.file) && (await Bun.file(join(outDir, record.file)).exists())) {
       kept.push(record);
       pages.set(pageKey(url), record);
       urls.push(url);
@@ -109,6 +109,14 @@ export async function compareWithSaved(
 function sameContent(a: PageAnalysis, b: PageAnalysis): boolean {
   const view = (p: PageAnalysis) => JSON.stringify([p.title, p.metaDescription, p.base, p.textBlocks, p.links]);
   return view(a) === view(b);
+}
+
+/**
+ * A saved path the crawl may keep using. Crawls from before the changes folder existed could save
+ * a `/changes` page under `changes/`, so those pages get fetched in full and saved to their new path.
+ */
+function isReusableFile(file: string): boolean {
+  return isSafeFile(file) && file.split("/")[0]?.toLowerCase() !== CHANGES_DIR;
 }
 
 /** A relative path with no `..` segment, so joining it to the output folder stays inside it. */
