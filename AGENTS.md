@@ -21,6 +21,10 @@ A command-line tool that crawls every page on one website, saves each page's HTM
 - Render reads file URLs from fetched JSON, not only the rendered DOM. Widgets often fetch every record and display a few.
 - Script-content signals and render files that appear on at least half the pages count as template and are reported once, not per page.
 - `HTMLRewriter` keeps one end-tag handler per element. Register every end-tag action in the single `*` handler in `src/html.ts`.
+- A crawl into a folder with an earlier crawl of the same site compares against it (`src/previous-run.ts`, `src/changes.ts`) and writes the delta to `changes/<time>/`. `urlToFilePath` keeps every page out of `changes/`.
+- The earlier manifest is untrusted input. Use a saved file path from it only after `isSafeFile` accepts it.
+- Render loads every page on every crawl, unchanged ones too. Script-loaded lists change while the page HTML stays the same.
+- A second crawl queues every page the earlier crawl saved. "Removed" means the page no longer loads. A page that loads but lost every link is "unlinked" and is reported apart from removed pages.
 
 ## Crawling
 - Crawl one site. Never crawl another host or follow a redirect to one.

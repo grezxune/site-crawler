@@ -73,6 +73,12 @@ describe("urlToFilePath", () => {
     expect(urlToFilePath(url("https://x.org/news?page=2"))).toMatch(/^news\/index\.[0-9a-f]{8}\.html$/);
   });
 
+  test("never saves a page inside the changes folder", () => {
+    expect(urlToFilePath(url("https://x.org/changes"))).toBe("changes_/index.html");
+    expect(urlToFilePath(url("https://x.org/Changes/2026"))).toBe("Changes_/2026/index.html");
+    expect(urlToFilePath(url("https://x.org/changes.html"))).toBe("changes.html");
+  });
+
   test("cannot escape the output folder", () => {
     expect(urlToFilePath(url("https://x.org/%2e%2e/%2e%2e/etc/passwd"))).toBe("etc/passwd/index.html");
     expect(urlToFilePath(url("https://x.org/a%2F..%2Fb"))).toBe("a_.._b/index.html");

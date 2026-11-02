@@ -13,6 +13,9 @@ const SKIPPED_PATH_PREFIXES = ["/cdn-cgi/"];
 
 const PAGE_EXTENSIONS = new Set(["html", "htm"]);
 
+/** The folder inside the output folder that holds each crawl's changes. No page is saved under it. */
+export const CHANGES_DIR = "changes";
+
 /** The site identity for a host: lowercase, with a leading `www.` removed. */
 export function siteKey(host: string): string {
   return host.toLowerCase().replace(/^www\./, "");
@@ -79,6 +82,8 @@ export function urlToFilePath(url: URL): string {
     segments.pop();
     fileName = last;
   }
+  // Lowercase, since `Changes/` and `changes/` are one folder on macOS.
+  if (segments[0]?.toLowerCase() === CHANGES_DIR) segments[0] = `${segments[0]}_`;
 
   if (url.search) {
     const dot = fileName.lastIndexOf(".");

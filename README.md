@@ -33,6 +33,7 @@ bun run report runs/example
 | `--max-link-checks <n>` | `2000` | Most links to check |
 | `--render` | off | Also load each page in a local headless Chrome and record the links and file URLs its scripts add |
 | `--chrome <path>` | found automatically | Browser for `--render`. `CHROME_PATH` works too. |
+| `--fresh` | off | Ignore an earlier crawl in the output folder. See [Crawling again](#crawling-again). |
 
 ## How it works
 
@@ -58,6 +59,28 @@ A widget often fetches every record and shows ten, so render reads the JSON resp
 
 Render needs Chrome, Chromium, or Edge installed. It uses no npm package. It starts the browser with a temporary profile and deletes the profile when the crawl ends. The page's own scripts may reach other hosts, as they would in any browser. The browser fails every request for images, fonts, media, and files such as PDFs before it leaves the machine, so render records file URLs and never downloads them. It adds about 2 to 4 seconds per page.
 
+## Crawling again
+
+Run the same command again to get only what changed. When the output folder already holds a crawl of the same site, the crawler compares against it:
+
+1. It asks for each page with the `ETag` or `Last-Modified` from the last crawl. A page the server says is not modified keeps its saved copy and is not downloaded.
+2. It requests every page the last crawl saved, even pages nothing links to anymore. That is how it tells a page that is gone from a page that only lost its links.
+3. A page that comes back in full counts as changed only if its title, description, visible text, or links differ. A token or timestamp that differs on every request does not count, and the saved file is not rewritten.
+4. It updates the output folder in place, then writes `changes/<time>/` with copies of the new and changed pages and a `changes.json`.
+
+`changes.json` lists:
+
+- new and changed pages, with their saved file
+- removed pages, which no longer load, with the reason, such as `HTTP 404` or `redirects to https://example.org/b`
+- unlinked pages, which still load but that no page or the sitemap links to anymore, so visitors cannot click to them
+- new and removed file URLs, such as PDFs, with the pages they were found on, whether the HTML or render found them, and the API calls that named them
+
+The CLI, the report's findings table, and the report's "Pages no longer linked" table call out unlinked pages apart from removed ones. A page linked only through a redirect still counts as linked. A page that was already unlinked in the last crawl is checked again but not listed again. The report's orphan pages section lists it.
+
+Files are compared by URL, so none are downloaded. With `--render`, every page loads again even when its HTML did not change, because script-loaded lists such as meeting archives change while the page stays the same. If only one of the two crawls used `--render`, only files the server HTML links are compared, and no page is listed as unlinked, since render finds links the server HTML lacks.
+
+When nothing changed, no changes folder is written. The report gets a "Changes since the last crawl" section. `--fresh` ignores the earlier crawl and fetches every page in full. A folder that holds another site's crawl stops the crawl before any request.
+
 ## Output
 
 Each page becomes `<path>/index.html`, so a page and its child pages never collide.
@@ -71,9 +94,13 @@ runs/example/
   manifest.json
   report.md
   report.json
+  changes/
+    2026-11-02T15-04-05Z/     written by a later crawl
+      changes.json
+      news/index.html         a page that changed since the crawl before
 ```
 
-URLs with a query string get a short hash in the file name, such as `news/index.257a9712.html`.
+URLs with a query string get a short hash in the file name, such as `news/index.257a9712.html`. No page is saved under `changes/`. A page at `/changes` saves to `changes_/index.html`.
 
 `manifest.json` lists every URL the crawler fetched with its final URL, HTTP status, outcome, and saved file. Outcomes are `saved`, `not-html`, `http-error`, `offsite-redirect`, `duplicate`, and `failed`.
 
@@ -84,6 +111,7 @@ URLs with a query string get a short hash in the file name, such as `news/index.
 | Section | What it checks |
 | --- | --- |
 | Status | Homepage status and speed, HTTPS, HSTS, server, robots.txt, sitemap, totals |
+| Changes since the last crawl | After a crawl into a folder with an earlier crawl: new, changed, and removed pages, pages that still load but lost every link, and new and removed files |
 | Broken pages | 4xx, 5xx, and failed requests, with the pages that link to each |
 | Content loaded by JavaScript | Pages with loading placeholders, widget scripts, cross-host frames, or API hosts in inline scripts. With `--render`: the files, links, and API calls render found on each page. |
 | Broken files and external links | With `--check-links`: linked files and external pages that return an error or never answer, with the pages that link to each. Servers that refuse automated checks (401, 403, 429) are listed apart for a person to confirm. |
@@ -101,7 +129,7 @@ URLs with a query string get a short hash in the file name, such as `news/index.
 
 Without `--render`, the crawler does not run JavaScript. A page that loads its content with scripts or an iframe can look thin. The thin-page table shows frame and file-link counts to help spot these.
 
-Running a crawl again overwrites pages in place. Pages removed from the site stay on disk until you delete the folder.
+Pages removed from the site stay on disk until you delete them. The manifest and the report leave them out.
 
 ## Responsible use
 

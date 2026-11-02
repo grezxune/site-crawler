@@ -73,6 +73,43 @@ export function scriptContentSection(report: Report, path: PathFormatter): strin
   return blocks;
 }
 
+export function changesSection(report: Report, path: PathFormatter): string[] {
+  const changes = report.changes;
+  if (!changes) return [];
+  const { pages, files } = changes;
+  const since = `Compared with the crawl on ${changes.since.slice(0, 16).replace("T", " ")} UTC.`;
+  const blocks = ["## Changes since the last crawl", changes.dir
+    ? `${since} Copies of the new and changed pages, and \`changes.json\` with every change, are in \`${changes.dir}/\`.`
+    : `${since} Nothing changed.`];
+  blocks.push(table(["Change", "Pages", "Files"], [
+    ["New", String(pages.new.length), String(files.new.length)],
+    ["Changed", String(pages.changed.length), ""],
+    ["Removed (no longer loads)", String(pages.removed.length), String(files.removed.length)],
+    ["No longer linked (still loads)", String(pages.unlinked.length), ""],
+    ["Unchanged", `${pages.unchanged} (${pages.notModified} not downloaded)`, ""],
+  ]));
+  if (!changes.sameRender) {
+    blocks.push("Only one of the two crawls used `--render`, so only files the server HTML links were compared, and no page was checked for lost links.");
+  }
+  const pageRows = [
+    ...pages.new.map((p) => [path(p.url), "new", ""]),
+    ...pages.changed.map((p) => [path(p.url), "changed", ""]),
+    ...pages.removed.map((p) => [path(p.url), "removed", p.reason]),
+  ];
+  if (pageRows.length) blocks.push(capped(pageRows, (rows) => table(["Page", "Change", "Reason"], rows)));
+  const fileRows = [
+    ...files.new.map((f) => [path(f.url), "new", list(f.pages.map(path), 3)]),
+    ...files.removed.map((f) => [path(f.url), "removed", list(f.pages.map(path), 3)]),
+  ];
+  if (fileRows.length) blocks.push(capped(fileRows, (rows) => table(["File", "Change", "Found on"], rows)));
+  if (pages.unlinked.length) {
+    blocks.push("### Pages no longer linked",
+      "These pages still load, but no page or the sitemap links to them anymore, so visitors cannot click to them. The last crawl found a link to each. Decide whether each one should be linked again, redirected, or left out of a rebuild.",
+      capped(pages.unlinked, (rows) => table(["Page", "Saved as"], rows.map((p) => [path(p.url), p.file]))));
+  }
+  return blocks;
+}
+
 function sortedEntries(counts: Record<string, number>): string[][] {
   return Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, v]) => [k, String(v)]);
 }

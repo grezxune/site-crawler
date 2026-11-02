@@ -17,15 +17,17 @@ export function sleep(ms: number): Promise<void> {
 /**
  * Fetches a page and follows each redirect only if `shouldFollow` accepts the target.
  * The crawler uses this to stay off other hosts and skip pages it already has.
+ * `headersFor` adds headers to the request for each URL, such as `If-None-Match`.
  */
 export async function fetchPage(
   url: URL,
   userAgent: string,
   shouldFollow: (next: URL) => boolean,
+  headersFor: (url: URL) => Record<string, string> = () => ({}),
 ): Promise<FetchResult> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const response = await fetchWithRetry(current, userAgent);
+    const response = await fetchWithRetry(current, userAgent, headersFor(current));
     const location = response.headers.get("location");
     if (response.status < 300 || response.status >= 400 || !location) {
       return { response, finalUrl: current };
@@ -40,11 +42,11 @@ export async function fetchPage(
 }
 
 /** One GET with a timeout. Retries network errors, 429, and 5xx with backoff. */
-async function fetchWithRetry(url: URL, userAgent: string): Promise<Response> {
+async function fetchWithRetry(url: URL, userAgent: string, extraHeaders: Record<string, string>): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     try {
       const response = await fetch(url, {
-        headers: { "User-Agent": userAgent, Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5" },
+        headers: { ...extraHeaders, "User-Agent": userAgent, Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5" },
         redirect: "manual",
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
