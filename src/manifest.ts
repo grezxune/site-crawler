@@ -9,6 +9,30 @@ export const MANIFEST_FILE = "manifest.json";
 
 export type PageOutcome = "saved" | "not-html" | "http-error" | "offsite-redirect" | "duplicate" | "failed";
 
+export type FileOutcome = "saved" | "http-error" | "too-large" | "offsite-redirect" | "failed";
+
+/** A same-site file, such as an image or a PDF, that the crawl downloaded with `--save-files`. */
+export interface FileRecord {
+  url: string;
+  /** Path of the saved file, relative to the output folder. Always under `files/`. */
+  file: string | null;
+  status: number | null;
+  outcome: FileOutcome;
+  contentType: string | null;
+  bytes: number | null;
+  /** SHA-256 of the saved bytes, in hex. A file counts as changed only when this differs. */
+  sha256: string | null;
+  lastModified: string | null;
+  etag: string | null;
+  /** How the saved file compares with the earlier crawl. Missing when the earlier crawl saved no files. */
+  change?: PageChange;
+  /** True when the server answered 304, so the saved copy was kept without a download. */
+  notModified?: boolean;
+  /** True when the earlier crawl saved the file with no ETag or Last-Modified, so it was kept without a request. */
+  notRequested?: boolean;
+  error?: string;
+}
+
 export interface PageRecord {
   url: string;
   /** Where the request ended up after redirects. */
@@ -47,6 +71,14 @@ export interface CrawlSettings {
   maxLinkChecks: number;
   /** Load each page in a headless browser and record what its scripts add. */
   render: boolean;
+  /** Query parameters removed from every link before it is queued. Missing in manifests from before the option. */
+  stripParams?: string[];
+  /** CSS selectors for elements left out when comparing a page with the earlier crawl's copy. */
+  ignoreSelectors?: string[];
+  /** Download same-site images, media, and documents into `files/`. Missing in manifests from before the option. */
+  saveFiles?: boolean;
+  /** Largest file `saveFiles` downloads, in bytes. */
+  maxFileBytes?: number;
 }
 
 /** Everything a crawl learned. The report is built from this file plus the saved HTML. */
@@ -68,12 +100,18 @@ export interface Manifest {
   linkChecks?: LinkCheckResult;
   /** What changed since the earlier crawl in the same folder. Missing when there was none. */
   changes?: Changes;
+  /** Files downloaded with `saveFiles`. Missing when the crawl ran without it. */
+  files?: FileRecord[];
 }
 
 /** Copies only the settings fields, so extra crawl options never leak into the manifest. */
 export function crawlSettings(options: CrawlSettings, delayMs: number): CrawlSettings {
   const { concurrency, maxPages, useSitemap, respectRobots, userAgent, checkLinks, maxLinkChecks, render } = options;
-  return { concurrency, delayMs, maxPages, useSitemap, respectRobots, userAgent, checkLinks, maxLinkChecks, render };
+  const { stripParams = [], ignoreSelectors = [], saveFiles = false, maxFileBytes } = options;
+  return {
+    concurrency, delayMs, maxPages, useSitemap, respectRobots, userAgent, checkLinks, maxLinkChecks, render,
+    stripParams, ignoreSelectors, saveFiles, ...(saveFiles && maxFileBytes !== undefined ? { maxFileBytes } : {}),
+  };
 }
 
 export async function writeManifest(outDir: string, manifest: Manifest): Promise<void> {

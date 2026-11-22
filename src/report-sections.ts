@@ -88,6 +88,10 @@ export function changesSection(report: Report, path: PathFormatter): string[] {
     ["No longer linked (still loads)", String(pages.unlinked.length), ""],
     ["Unchanged", `${pages.unchanged} (${pages.notModified} not downloaded)`, ""],
   ]));
+  const saved = changes.savedFiles;
+  if (saved) {
+    blocks.push(`Saved files: ${saved.new.length} new, ${saved.changed.length} changed, ${saved.removed.length} removed, ${saved.unchanged} unchanged (${saved.notDownloaded} not downloaded). \`changes.json\` lists each one.`);
+  }
   if (!changes.sameRender) {
     blocks.push("Only one of the two crawls used `--render`, so only files the server HTML links were compared, and no page was checked for lost links.");
   }

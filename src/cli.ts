@@ -30,6 +30,15 @@ Options:
                        the links and file URLs its scripts add. Page scripts may
                        reach other hosts. Images, fonts, media, and files are blocked.
   --chrome <path>      Browser for --render (default: CHROME_PATH or a found install)
+  --strip-param <name> Remove this query parameter from every link before queueing it,
+                       so sort and filter copies of one list count as one page.
+                       Repeat for more than one parameter.
+  --ignore-selector <css>  Leave elements matching this CSS selector out when deciding
+                       whether a page changed, such as a block of products picked at
+                       random. Their links are still followed. Repeat for more.
+  --save-files         Also download this site's images, media, and documents into
+                       files/. A later crawl downloads only new and changed files.
+  --max-file-mb <n>    Largest file --save-files downloads (default: 50)
   --fresh              Ignore an earlier crawl in the output folder. Without it, the
                        crawl asks only for pages that changed, and copies new and
                        changed pages to changes/<time>/ with a changes.json
@@ -53,7 +62,11 @@ function printChanges(changes: Changes | undefined, outDir: string): void {
   }
   console.log(`  Changes since the crawl on ${since} UTC:`);
   console.log(`    pages: ${pages.new.length} new, ${pages.changed.length} changed, ${pages.removed.length} removed, ${pages.unchanged} unchanged (${pages.notModified} not downloaded)`);
-  console.log(`    files: ${files.new.length} new, ${files.removed.length} removed`);
+  console.log(`    linked files: ${files.new.length} new, ${files.removed.length} removed`);
+  const saved = changes.savedFiles;
+  if (saved) {
+    console.log(`    saved files: ${saved.new.length} new, ${saved.changed.length} changed, ${saved.removed.length} removed, ${saved.unchanged} unchanged (${saved.notDownloaded} not downloaded)`);
+  }
   if (pages.unlinked.length) {
     console.log(`    ${pages.unlinked.length} pages still load, but no page or the sitemap links to them anymore:`);
     for (const page of pages.unlinked) console.log(`      ${page.url}`);
@@ -87,6 +100,10 @@ async function main(): Promise<void> {
       render: { type: "boolean", default: false },
       chrome: { type: "string" },
       fresh: { type: "boolean", default: false },
+      "strip-param": { type: "string", multiple: true, default: [] },
+      "ignore-selector": { type: "string", multiple: true, default: [] },
+      "save-files": { type: "boolean", default: false },
+      "max-file-mb": { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -118,6 +135,14 @@ async function main(): Promise<void> {
     render: values.render,
     chromePath: values.chrome,
     fresh: values.fresh,
+    stripParams: values["strip-param"],
+    ignoreSelectors: values["ignore-selector"],
+    saveFiles: values["save-files"],
+    maxFileBytes: positiveInt(values["max-file-mb"], 50, "max-file-mb") * 1024 * 1024,
+    onFile(file, done) {
+      if (file.outcome !== "saved") console.log(`  file ${file.outcome.padEnd(16)} ${file.status ?? file.error ?? ""}  ${file.url}`);
+      else if (done % 100 === 0) console.log(`  saved ${done} files`);
+    },
     onLinkCheck(check) {
       linksChecked++;
       if (check.verdict !== "ok") console.log(`  link ${check.verdict.padEnd(8)} ${check.status ?? check.error ?? ""}  ${check.url}`);
@@ -143,6 +168,11 @@ async function main(): Promise<void> {
     console.log(`  blocked by robots.txt: ${result.robots.blocked.length}`);
   }
   if (result.hitPageLimit) console.log("  Stopped queueing at --max-pages. Some pages were not fetched.");
+  if (result.files) {
+    const saved = result.files.filter((file) => file.outcome === "saved");
+    const mb = (saved.reduce((sum, file) => sum + (file.bytes ?? 0), 0) / 1024 / 1024).toFixed(1);
+    console.log(`  Saved ${saved.length} of ${result.files.length} files (${mb} MB) to ${resolve(outDir, "files")}`);
+  }
   if (result.linkChecks?.checked) {
     const verdicts = Object.groupBy(result.linkChecks.checks, (check) => check.verdict);
     const summary = Object.entries(verdicts).map(([verdict, checks]) => `${checks?.length ?? 0} ${verdict}`).join(", ");
@@ -150,6 +180,9 @@ async function main(): Promise<void> {
     console.log(`  Checked ${result.linkChecks.checks.length} links: ${summary || "none found"}.${skipped}`);
   }
   printChanges(result.changes, outDir);
+  if (result.changes && result.files && !result.changes.savedFiles) {
+    console.log("    The earlier crawl saved no files, so files were not compared. The next crawl compares them.");
+  }
 
   printReportSummary(await writeReport(outDir), outDir);
 }

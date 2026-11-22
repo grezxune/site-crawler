@@ -1,6 +1,6 @@
 # Site Crawler
 
-Crawls every page on one website, saves each page's HTML to disk, and writes a report on the site's health: broken pages and links, redirects, thin and orphaned pages, search metadata, accessibility basics, and more.
+Crawls every page on one website, saves each page's HTML to disk, optionally saves the site's images and documents, and writes a report on the site's health: broken pages and links, redirects, thin and orphaned pages, search metadata, accessibility basics, and more.
 
 It runs on [Bun](https://bun.sh) and has no runtime dependencies.
 
@@ -11,6 +11,7 @@ bun install
 bun run crawl https://example.org/
 bun run crawl https://example.org/ --check-links
 bun run crawl https://example.org/ --render
+bun run crawl https://example.org/ --save-files --strip-param order
 ```
 
 Output goes to `runs/<site name>/`. `example.org` saves to `runs/example/`. The `runs/` folder is gitignored.
@@ -33,6 +34,10 @@ bun run report runs/example
 | `--max-link-checks <n>` | `2000` | Most links to check |
 | `--render` | off | Also load each page in a local headless Chrome and record the links and file URLs its scripts add |
 | `--chrome <path>` | found automatically | Browser for `--render`. `CHROME_PATH` works too. |
+| `--strip-param <name>` | none | Remove this query parameter from every link before queueing it. Repeat for more. See [Sort and filter links](#sort-and-filter-links). |
+| `--ignore-selector <css>` | none | Leave elements matching this selector out when deciding whether a page changed. Repeat for more. See [Crawling again](#crawling-again). |
+| `--save-files` | off | Also download the site's own images, media, and documents into `files/`. See [Saving files](#saving-files). |
+| `--max-file-mb <n>` | `50` | Largest file `--save-files` downloads |
 | `--fresh` | off | Ignore an earlier crawl in the output folder. See [Crawling again](#crawling-again). |
 
 ## How it works
@@ -41,9 +46,10 @@ bun run report runs/example
 2. Seeds the queue with the start URL and every page in the sitemap, so pages with no inbound links still get saved.
 3. Fetches pages breadth-first and follows `a`, `area`, `frame`, and `iframe` links.
 4. Stays on one site. `www.example.org` and `example.org` count as the same site. Redirects to other hosts are recorded and never followed.
-5. Skips links to files such as PDFs, images, and stylesheets. Only `text/html` responses are saved.
+5. Skips links to files such as PDFs, images, and stylesheets. Only `text/html` responses are saved, unless `--save-files` is on.
 6. With `--render`, loads each saved page in a local headless Chrome, Chromium, or Edge over the DevTools Protocol. See [Render mode](#render-mode).
-7. With `--check-links`, sends one HEAD request to each linked file and external page after the crawl. Any error is confirmed with a 1-byte ranged GET, because some servers answer HEAD wrongly. No file is downloaded in full. Each host gets at most 2 requests at a time.
+7. With `--save-files`, downloads every same-site image, media file, and document the saved pages link to or load. See [Saving files](#saving-files).
+8. With `--check-links`, sends one HEAD request to each linked file and external page after the crawl. Any error is confirmed with a 1-byte ranged GET, because some servers answer HEAD wrongly. No file is downloaded in full. Each host gets at most 2 requests at a time.
 
 ## Render mode
 
@@ -59,13 +65,28 @@ A widget often fetches every record and shows ten, so render reads the JSON resp
 
 Render needs Chrome, Chromium, or Edge installed. It uses no npm package. It starts the browser with a temporary profile and deletes the profile when the crawl ends. The page's own scripts may reach other hosts, as they would in any browser. The browser fails every request for images, fonts, media, and files such as PDFs before it leaves the machine, so render records file URLs and never downloads them. It adds about 2 to 4 seconds per page.
 
+## Sort and filter links
+
+Shop and archive pages often link every list in several sort orders, such as `?order=price.asc`. Each order is a new URL with the same items, so a crawl can spend most of its page budget on copies. `--strip-param order` removes the `order` parameter from every link, start URL, sitemap entry, and earlier page before it is queued. `/list?order=name&page=2` becomes `/list?page=2`, so each list page is fetched once. Pages an earlier crawl saved under a stripped URL are left out of the comparison and not reported as removed.
+
+## Saving files
+
+`--save-files` keeps a local copy of the site's own files as well as its pages. After the pages are crawled, it downloads every same-site URL the saved pages link to (`a`, `area`) or load (`img`, `source`, `video`, `audio`, `link`) whose extension marks it as an image, media file, or document, such as `.jpg`, `.png`, `.mp4`, or `.pdf`. Stylesheets, scripts, and fonts are skipped. With `--render`, the files render found count too.
+
+- Each file saves under `files/` at its URL's path: `https://example.org/img/hall.jpg` saves to `files/img/hall.jpg`. A page at `/files` saves to `files_/index.html`.
+- It downloads only from the crawled site, follows a redirect only within it, and skips any path `robots.txt` disallows.
+- A file larger than `--max-file-mb` is recorded as `too-large` and not saved.
+- `manifest.json` lists every file with its status, size, SHA-256, `ETag`, and `Last-Modified`. The report's status table counts them.
+
+On a later crawl into the same folder, a file the earlier crawl saved is asked for with its `ETag` or `Last-Modified`. A 304 keeps the saved copy. A file with neither is kept without a request, since the URL already names it. `--fresh` downloads every file again. A file that downloads with the same bytes is not rewritten. `changes.json` then gets a `savedFiles` section with new, changed, and removed files, and the new and changed files are copied to the changes folder. A file no page links to anymore stays on disk and is listed as removed. Files are compared only when both crawls used `--save-files`.
+
 ## Crawling again
 
 Run the same command again to get only what changed. When the output folder already holds a crawl of the same site, the crawler compares against it:
 
 1. It asks for each page with the `ETag` or `Last-Modified` from the last crawl. A page the server says is not modified keeps its saved copy and is not downloaded.
 2. It requests every page the last crawl saved, even pages nothing links to anymore. That is how it tells a page that is gone from a page that only lost its links.
-3. A page that comes back in full counts as changed only if its title, description, visible text, or links differ. A token or timestamp that differs on every request does not count, and the saved file is not rewritten.
+3. A page that comes back in full counts as changed only if its title, description, visible text, or links differ. A token or timestamp that differs on every request does not count, and the saved file is not rewritten. Some sites show a block that changes on every visit, such as other products picked at random. `--ignore-selector "section.related"` leaves every matching element out of this comparison. The crawl still follows the links inside it.
 4. It updates the output folder in place, then writes `changes/<time>/` with copies of the new and changed pages and a `changes.json`.
 
 `changes.json` lists:
@@ -91,6 +112,8 @@ runs/example/
   about/index.html            https://example.org/about
   news/index.html             https://example.org/news
   news/spring-cleanup/index.html
+  files/                      with --save-files
+    img/hall.jpg              https://example.org/img/hall.jpg
   manifest.json
   report.md
   report.json
@@ -98,9 +121,10 @@ runs/example/
     2026-11-02T15-04-05Z/     written by a later crawl
       changes.json
       news/index.html         a page that changed since the crawl before
+      files/img/hall.jpg      a saved file that changed, with --save-files
 ```
 
-URLs with a query string get a short hash in the file name, such as `news/index.257a9712.html`. No page is saved under `changes/`. A page at `/changes` saves to `changes_/index.html`.
+URLs with a query string get a short hash in the file name, such as `news/index.257a9712.html`. No page is saved under `changes/` or `files/`. A page at `/changes` saves to `changes_/index.html`.
 
 `manifest.json` lists every URL the crawler fetched with its final URL, HTTP status, outcome, and saved file. Outcomes are `saved`, `not-html`, `http-error`, `offsite-redirect`, `duplicate`, and `failed`.
 
@@ -133,7 +157,7 @@ Pages removed from the site stay on disk until you delete them. The manifest and
 
 ## Responsible use
 
-The crawler reads `robots.txt`, honors `Crawl-delay`, waits between requests, and identifies itself as `site-crawler/0.1`. Render loads only pages the crawl itself fetches, one browser tab per worker. Keep those defaults when you crawl a site you do not run, and follow the site's terms.
+The crawler reads `robots.txt`, honors `Crawl-delay`, waits between requests, and identifies itself as `site-crawler/0.1`. Render loads only pages the crawl itself fetches, one browser tab per worker. `--save-files` uses the same workers and delay, and a later crawl downloads only new and changed files. Keep those defaults when you crawl a site you do not run, and follow the site's terms.
 
 ## Development
 

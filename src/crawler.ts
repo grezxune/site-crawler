@@ -8,15 +8,16 @@ import { analyzePage } from "./html.ts";
 import { fetchPage, sleep } from "./http.ts";
 import { checkLinks, type LinkCheck, NOT_CHECKED } from "./link-check.ts";
 import {
-  crawlSettings, type CrawlSettings, type Manifest, type PageOutcome, type PageRecord, writeManifest,
+  crawlSettings, type CrawlSettings, type FileRecord, type Manifest, type PageOutcome, type PageRecord, writeManifest,
 } from "./manifest.ts";
 import {
-  compareWithSaved, conditionalHeaders, loadPreviousRun, readSavedPage, responseFields, savedFiles,
+  checkSelectors, compareWithSaved, conditionalHeaders, loadPreviousRun, readSavedPage, responseFields, savedFiles,
 } from "./previous-run.ts";
 import { renderPage } from "./render.ts";
 import { ALLOW_ALL, loadRobots } from "./robots.ts";
+import { filesOnPage, saveFiles } from "./save-files.ts";
 import { loadSitemap, type Sitemap } from "./sitemap.ts";
-import { isSameSite, normalizeUrl, pageKey, siteKey } from "./urls.ts";
+import { isSameSite, normalizeUrl, pageKey, siteKey, stripParams } from "./urls.ts";
 
 // Start-page headers worth keeping for the report.
 const START_HEADERS = ["server", "strict-transport-security", "x-powered-by", "content-security-policy"];
@@ -29,6 +30,7 @@ export interface CrawlOptions extends CrawlSettings {
   /** Ignore an earlier crawl in `outDir`: fetch every page in full and record no changes. */
   fresh?: boolean;
   onPage?: (page: PageRecord, done: number) => void;
+  onFile?: (file: FileRecord, done: number) => void;
   onLinkCheck?: (check: LinkCheck) => void;
 }
 
@@ -36,6 +38,7 @@ export interface CrawlOptions extends CrawlSettings {
 export async function crawl(options: CrawlOptions): Promise<Manifest> {
   const start = normalizeUrl(options.startUrl);
   if (!start) throw new Error(`Not an http(s) URL: ${options.startUrl}`);
+  checkSelectors(options.ignoreSelectors ?? []);
   // The browser starts first, so a missing browser stops the crawl before any request.
   const browser = options.render ? await startBrowser(options.chromePath) : null;
   try {
@@ -55,6 +58,9 @@ async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | n
   const frontier = new Frontier(site, robots, options.maxPages, savedFiles(previous));
   const pages: PageRecord[] = [];
   const startHeaders: Record<string, string> = {};
+  const fileUrls = new Set<string>();
+  // Sort and filter parameters make many URLs for one list. Stripping them leaves one page per list.
+  const tidy = (url: URL) => stripParams(url, options.stripParams ?? []);
 
   const processPage = async (url: URL): Promise<PageRecord> => {
     const record: PageRecord = {
@@ -96,7 +102,9 @@ async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | n
       record.ms = elapsed();
       const analysis = await analyzePage(html);
       const file = frontier.claimFile(finalUrl);
-      if (previous) record.change = kept ? "unchanged" : await compareWithSaved(options.outDir, before, html, analysis);
+      if (previous) {
+        record.change = kept ? "unchanged" : await compareWithSaved(options.outDir, before, html, analysis, options.ignoreSelectors);
+      }
       // An unchanged page keeps its saved file, so a token that differs on every request causes no rewrite.
       const keepFile = record.change === "unchanged" && file === before?.file;
       record.bytes = (keepFile ? before?.bytes : null) ?? Buffer.byteLength(html);
@@ -112,15 +120,16 @@ async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | n
       const baseUrl = (base !== null ? normalizeUrl(base, finalUrl) : null) ?? finalUrl;
       for (const href of links) {
         const link = normalizeUrl(href, baseUrl);
-        if (link) frontier.addLink(link);
+        if (link) frontier.addLink(tidy(link));
       }
       if (browser) {
         record.render = await renderPage(browser, finalUrl.href);
         for (const href of [...record.render.links, ...record.render.files.map((file) => file.url)]) {
           const link = normalizeUrl(href);
-          if (link) frontier.addLink(link);
+          if (link) frontier.addLink(tidy(link));
         }
       }
+      if (options.saveFiles) for (const url of filesOnPage(analysis, baseUrl, site, record.render)) fileUrls.add(url);
     } catch (error) {
       record.outcome = "failed";
       record.ms ??= elapsed();
@@ -129,18 +138,18 @@ async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | n
     return record;
   };
 
-  frontier.enqueue(start);
+  frontier.enqueue(tidy(start));
   let sitemap: Sitemap = { found: false, entries: [] };
   if (options.useSitemap) {
     const sitemapUrls = robots.sitemaps.length > 0 ? robots.sitemaps : [new URL("/sitemap.xml", start.origin).href];
     sitemap = await loadSitemap(sitemapUrls, options.userAgent);
     for (const entry of sitemap.entries) {
       const url = normalizeUrl(entry.loc);
-      if (url) frontier.enqueue(url);
+      if (url) frontier.enqueue(tidy(url));
     }
   }
   // Every page the earlier crawl saved gets checked again, so a page nothing links to anymore is not taken for gone.
-  for (const url of previous?.urls ?? []) frontier.enqueue(url);
+  for (const url of previous?.urls ?? []) frontier.enqueue(tidy(url));
 
   let active = 0;
   const worker = async (): Promise<void> => {
@@ -169,6 +178,12 @@ async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | n
       onCheck: options.onLinkCheck,
     })
     : NOT_CHECKED;
+  const files = options.saveFiles
+    ? await saveFiles(fileUrls, {
+      outDir: options.outDir, site, robots, userAgent: options.userAgent, concurrency: options.concurrency, delayMs,
+      maxFileBytes: options.maxFileBytes, previous: previous?.savedFiles ?? null, onFile: options.onFile,
+    })
+    : undefined;
 
   const manifest: Manifest = {
     site,
@@ -185,6 +200,7 @@ async function crawlSite(options: CrawlOptions, start: URL, browser: Browser | n
     startHeaders,
     pages,
     linkChecks,
+    ...(files ? { files } : {}),
   };
   await mkdir(options.outDir, { recursive: true });
   if (previous) manifest.changes = await recordChanges(options.outDir, previous, manifest);

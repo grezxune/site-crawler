@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { type FileEntry, fileEntries, linkedPages, type PageChange } from "./changes.ts";
 import { analyzePage, type PageAnalysis } from "./html.ts";
-import { type Manifest, MANIFEST_FILE, type PageRecord, readManifest } from "./manifest.ts";
+import { type FileRecord, type Manifest, MANIFEST_FILE, type PageRecord, readManifest } from "./manifest.ts";
 import { buildSiteData } from "./site-data.ts";
-import { CHANGES_DIR, normalizeUrl, pageKey } from "./urls.ts";
+import { FILES_DIR, isReservedDir, normalizeUrl, pageKey } from "./urls.ts";
 
 /** What a crawl needs from the earlier crawl in the same folder. */
 export interface PreviousRun {
@@ -17,6 +17,8 @@ export interface PreviousRun {
   linked: Set<string>;
   /** Files such as PDFs the earlier crawl found, by URL. */
   files: Map<string, FileEntry>;
+  /** Files the earlier crawl downloaded with `--save-files`, by URL. Null when it saved none. */
+  savedFiles: Map<string, FileRecord> | null;
 }
 
 /**
@@ -56,7 +58,19 @@ export async function loadPreviousRun(outDir: string, site: string): Promise<Pre
   }
   manifest.pages = kept;
   const data = await buildSiteData(outDir, manifest);
-  return { manifest, pages, urls, linked: linkedPages(data), files: fileEntries(data) };
+  return { manifest, pages, urls, linked: linkedPages(data), files: fileEntries(data), savedFiles: await loadSavedFiles(outDir, manifest) };
+}
+
+/** The earlier crawl's saved files that are still on disk at a safe path, by URL. */
+async function loadSavedFiles(outDir: string, manifest: Manifest): Promise<Map<string, FileRecord> | null> {
+  if (!manifest.settings.saveFiles || !Array.isArray(manifest.files)) return null;
+  const saved = new Map<string, FileRecord>();
+  for (const record of manifest.files) {
+    if (record.outcome !== "saved" || !record.file || !normalizeUrl(record.url)) continue;
+    if (!isSafeFile(record.file) || record.file.split("/")[0] !== FILES_DIR) continue;
+    if (await Bun.file(join(outDir, record.file)).exists()) saved.set(record.url, record);
+  }
+  return saved;
 }
 
 /** The saved file for each page key, so pages keep their paths across crawls. */
@@ -67,7 +81,7 @@ export function savedFiles(previous: PreviousRun | null): Map<string, string> {
 }
 
 /** `If-None-Match` and `If-Modified-Since` from the earlier crawl's copy of a page. */
-export function conditionalHeaders(record: PageRecord | undefined): Record<string, string> {
+export function conditionalHeaders(record: Pick<PageRecord, "etag" | "lastModified"> | undefined): Record<string, string> {
   const headers: Record<string, string> = {};
   // The manifest is a file on disk and may have been edited, so only clean header values go out.
   const clean = (value: string | null | undefined): value is string => !!value && /^[\x20-\x7e]{1,512}$/.test(value);
@@ -95,14 +109,43 @@ export async function readSavedPage(outDir: string, record: PageRecord): Promise
   return readFile(join(outDir, record.file), "utf8");
 }
 
-/** Whether a page fetched in full is new, changed, or unchanged since the earlier crawl saved `before`. */
+/**
+ * Whether a page fetched in full is new, changed, or unchanged since the earlier crawl saved `before`.
+ * Elements matching `ignore`, such as a block of products picked at random, are left out of the comparison.
+ */
 export async function compareWithSaved(
-  outDir: string, before: PageRecord | undefined, html: string, analysis: PageAnalysis,
+  outDir: string, before: PageRecord | undefined, html: string, analysis: PageAnalysis, ignore: readonly string[] = [],
 ): Promise<PageChange> {
   if (!before) return "new";
   const saved = await readSavedPage(outDir, before).catch(() => null);
   if (saved === null) return "changed";
-  return saved === html || sameContent(analysis, await analyzePage(saved)) ? "unchanged" : "changed";
+  if (saved === html) return "unchanged";
+  const [now, then] = ignore.length
+    ? await Promise.all([html, saved].map(async (page) => analyzePage(await withoutElements(page, ignore))))
+    : [analysis, await analyzePage(saved)];
+  return now && then && sameContent(now, then) ? "unchanged" : "changed";
+}
+
+/** The page with every element matching one of `selectors` removed, content and all. */
+export async function withoutElements(html: string, selectors: readonly string[]): Promise<string> {
+  let rewriter = new HTMLRewriter();
+  for (const selector of selectors) rewriter = rewriter.on(selector, {
+    element: (element) => {
+      element.remove();
+    },
+  });
+  return rewriter.transform(new Response(html)).text();
+}
+
+/** Throws a readable error for a selector HTMLRewriter cannot parse, before any request. */
+export function checkSelectors(selectors: readonly string[]): void {
+  for (const selector of selectors) {
+    try {
+      new HTMLRewriter().on(selector, {});
+    } catch {
+      throw new Error(`Not a CSS selector the crawler can match: ${selector}`);
+    }
+  }
 }
 
 /** True when two copies of a page have the same title, description, text, base, and links. */
@@ -112,11 +155,11 @@ function sameContent(a: PageAnalysis, b: PageAnalysis): boolean {
 }
 
 /**
- * A saved path the crawl may keep using. Crawls from before the changes folder existed could save
- * a `/changes` page under `changes/`, so those pages get fetched in full and saved to their new path.
+ * A saved path the crawl may keep using. Older crawls could save a `/changes` or `/files` page under
+ * the folder the crawl now writes itself, so those pages get fetched in full and saved to their new path.
  */
 function isReusableFile(file: string): boolean {
-  return isSafeFile(file) && file.split("/")[0]?.toLowerCase() !== CHANGES_DIR;
+  return isSafeFile(file) && !isReservedDir(file.split("/")[0]);
 }
 
 /** A relative path with no `..` segment, so joining it to the output folder stays inside it. */

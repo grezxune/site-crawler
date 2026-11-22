@@ -1,5 +1,6 @@
 import type { Changes } from "./changes.ts";
 import type { LinkVerdict } from "./link-check.ts";
+import type { FileRecord } from "./manifest.ts";
 import {
   clickDepth, findStale, groupBy, LONG_TITLE, PLACEHOLDER, sitemapProblem, summarizeFiles, summarizeLinkChecks,
   THIN_WORDS, toKey, topBy, unique,
@@ -25,6 +26,8 @@ export interface Report {
   totals: {
     fetched: number; saved: number; htmlBytes: number; averageMs: number; medianMs: number;
     outcomes: Record<string, number>;
+    /** Files downloaded with `--save-files`. Null when the crawl ran without it. */
+    files: { found: number; saved: number; bytes: number } | null;
   };
   broken: (Linked & { status: number | null; error: string | null; inSitemap: boolean })[];
   redirects: (Linked & { finalUrl: Url; offSite: boolean; trailingSlashOnly: boolean; inSitemap: boolean })[];
@@ -103,6 +106,7 @@ export function buildReport(data: SiteData): Report {
       averageMs: timed.length ? Math.round(timed.reduce((a, b) => a + b, 0) / timed.length) : 0,
       medianMs: timed[Math.floor(timed.length / 2)] ?? 0,
       outcomes,
+      files: manifest.files ? savedFileTotals(manifest.files) : null,
     },
     broken: manifest.pages
       .filter((r) => r.outcome === "http-error" || r.outcome === "failed")
@@ -186,4 +190,9 @@ export function buildReport(data: SiteData): Report {
     scriptContent: summarizeScriptContent(data),
     changes: manifest.changes ?? null,
   };
+}
+
+function savedFileTotals(files: FileRecord[]): { found: number; saved: number; bytes: number } {
+  const saved = files.filter((file) => file.outcome === "saved");
+  return { found: files.length, saved: saved.length, bytes: saved.reduce((sum, file) => sum + (file.bytes ?? 0), 0) };
 }
