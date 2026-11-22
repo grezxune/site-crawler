@@ -32,6 +32,7 @@ export function renderMarkdown(report: Report): string {
     ["Sitemap", sitemap],
     ["Pages saved", `${totals.saved} of ${totals.fetched} URLs fetched`],
     ["HTML size", `${kb(totals.htmlBytes)} total`],
+    ...(totals.files ? [["Files saved", `${totals.files.saved} of ${totals.files.found} files, ${kb(totals.files.bytes)} total, in \`files/\``]] : []),
     ["Response time", `${totals.averageMs} ms average, ${totals.medianMs} ms median`],
     ...(status.hitPageLimit ? [["Page limit", "Reached. Some pages were not crawled."]] : []),
   ]));

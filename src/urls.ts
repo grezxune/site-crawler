@@ -16,6 +16,12 @@ const PAGE_EXTENSIONS = new Set(["html", "htm"]);
 /** The folder inside the output folder that holds each crawl's changes. No page is saved under it. */
 export const CHANGES_DIR = "changes";
 
+/** The folder inside the output folder that holds files saved with `--save-files`. No page is saved under it. */
+export const FILES_DIR = "files";
+
+// First path segments a page may not use, since the crawl writes its own folders there.
+const RESERVED_DIRS = new Set([CHANGES_DIR, FILES_DIR]);
+
 /** The site identity for a host: lowercase, with a leading `www.` removed. */
 export function siteKey(host: string): string {
   return host.toLowerCase().replace(/^www\./, "");
@@ -83,14 +89,47 @@ export function urlToFilePath(url: URL): string {
     fileName = last;
   }
   // Lowercase, since `Changes/` and `changes/` are one folder on macOS.
-  if (segments[0]?.toLowerCase() === CHANGES_DIR) segments[0] = `${segments[0]}_`;
+  if (isReservedDir(segments[0])) segments[0] = `${segments[0]}_`;
 
-  if (url.search) {
-    const dot = fileName.lastIndexOf(".");
-    fileName = `${fileName.slice(0, dot)}.${shortHash(url.search)}${fileName.slice(dot)}`;
-  }
+  return [...segments, withQueryHash(fileName, url.search)].join("/");
+}
 
-  return [...segments, fileName].join("/");
+/**
+ * Maps a file URL, such as an image or a PDF, to a relative path under `files/` in the output folder.
+ * The path mirrors the URL's path. Query strings add a short hash to the file name.
+ */
+export function fileUrlToPath(url: URL): string {
+  const segments = url.pathname
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => sanitizeSegment(safeDecode(segment)));
+  const fileName = segments.pop() ?? "_";
+  return [FILES_DIR, ...segments, withQueryHash(fileName, url.search)].join("/");
+}
+
+/** True when a first path segment is a folder the crawl writes itself, such as `changes`. */
+export function isReservedDir(segment: string | undefined): boolean {
+  return segment !== undefined && RESERVED_DIRS.has(segment.toLowerCase());
+}
+
+/**
+ * Removes the named query parameters from a URL. Sort and filter parameters such as `order` make
+ * many URLs for one list, so stripping them folds those copies into one page.
+ */
+export function stripParams(url: URL, names: readonly string[]): URL {
+  if (names.length === 0 || !url.search) return url;
+  const stripped = new URL(url);
+  for (const name of names) stripped.searchParams.delete(name);
+  if (stripped.searchParams.size === 0) stripped.search = "";
+  return stripped;
+}
+
+function withQueryHash(fileName: string, search: string): string {
+  if (!search) return fileName;
+  const dot = fileName.lastIndexOf(".");
+  return dot > 0
+    ? `${fileName.slice(0, dot)}.${shortHash(search)}${fileName.slice(dot)}`
+    : `${fileName}.${shortHash(search)}`;
 }
 
 export function shortHash(value: string): string {

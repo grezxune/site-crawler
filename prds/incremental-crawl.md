@@ -67,6 +67,11 @@ A person keeping a site import current, often for a municipal rebuild, wants onl
 - Given only one of the two crawls used `--render`, then no page is listed as unlinked, since render finds links the server HTML lacks.
 - Then the CLI summary, the report's "Changes since the last crawl" section, and the report's findings table each show the unlinked pages apart from removed pages.
 
+### R7 (P1): A block that changes on every visit can be left out of the comparison
+- Given `--ignore-selector <css>`, when a page comes back in full, then elements matching the selector are removed from both copies before their title, description, text, and links are compared.
+- Then links inside those elements are still followed.
+- Given a selector the crawler cannot parse, then the crawl stops before any request and names it.
+
 ## Constraints
 - Requests to other hosts: none added. The document lists come from URLs the crawl already records. Conditional requests go only to the crawled site.
 - Politeness: a 304 has no body, so a second crawl sends less data. The delay, robots.txt, and concurrency rules do not change.
@@ -82,3 +87,5 @@ A person keeping a site import current, often for a municipal rebuild, wants onl
 - 2026-11-02: A second crawl re-checks every page the earlier crawl saved (R6). On the municipal site, a test run reported 8 pages removed because nothing linked to them. Seven were past event pages that dropped off the events widget and likely still load. The project owner asked to tell "gone" apart from "no longer linked", and to call out the second kind.
 - 2026-11-02: Re-checked pages are rendered like any other page, so files found on them stay comparable. The project owner kept this over a faster crawl. On the municipal site, a second crawl took 67 seconds against 49 for the first. About 11 seconds came from rendering 9 re-checked pages, and the rest from slower page loads that day. The goal above changed from "no longer than the first" to match.
 - 2026-11-02: Render still loads every page. On the municipal site in `prds/script-loaded-content.md`, the meetings page HTML stays the same while the vendor API adds meetings.
+- 2026-11-21: `--save-files` (`prds/save-files.md`) adds an opt-in download of same-site files. The default stays record-only, and this PRD's file lists do not change.
+- 2026-11-21: Shop platforms show "other products in the same category" picked at random on every product page, so every product page counted as changed on every crawl. The person running the crawl names those blocks with `--ignore-selector`. Detecting them without a selector would need several fetches of each page.

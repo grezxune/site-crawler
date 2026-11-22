@@ -1,9 +1,11 @@
+import { constants } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Manifest, PageRecord } from "./manifest.ts";
 import type { PreviousRun } from "./previous-run.ts";
+import { compareSavedFiles } from "./save-files.ts";
 import { buildSiteData, type SiteData } from "./site-data.ts";
-import { CHANGES_DIR, normalizeUrl, pageKey } from "./urls.ts";
+import { CHANGES_DIR, normalizeUrl, pageKey, stripParams } from "./urls.ts";
 
 export const CHANGES_FILE = "changes.json";
 
@@ -53,6 +55,19 @@ export interface Changes {
     notModified: number;
   };
   files: { new: FileEntry[]; removed: FileEntry[] };
+  /**
+   * Files downloaded with `--save-files`, compared by their bytes. Missing unless both crawls saved files.
+   * New and changed files are copied to the changes folder at the same path.
+   */
+  savedFiles?: {
+    new: ChangedPage[];
+    changed: ChangedPage[];
+    /** Files the earlier crawl saved that no page links to anymore, or that no longer download. */
+    removed: RemovedPage[];
+    unchanged: number;
+    /** Unchanged files kept without a download: the server answered 304, or the file had no ETag or Last-Modified. */
+    notDownloaded: number;
+  };
 }
 
 /** Compares this crawl, already saved to disk, with the earlier crawl, and writes the changes folder when something changed. */
@@ -99,8 +114,14 @@ function compareRuns(previous: PreviousRun, manifest: Manifest, current: SiteDat
   const saved = manifest.pages.filter((record) => record.outcome === "saved" && record.file);
   const entry = (record: PageRecord): ChangedPage => ({ url: record.finalUrl ?? record.url, file: record.file ?? "" });
   const savedKeys = new Set(saved.map(keyOf));
+  // A page saved under a URL this crawl strips a parameter from is out of scope, not removed.
+  const strip = manifest.settings.stripParams ?? [];
+  const inScope = (record: PageRecord) => {
+    const url = new URL(record.finalUrl ?? record.url);
+    return stripParams(url, strip).href === url.href;
+  };
   const removed = [...previous.pages]
-    .filter(([key]) => !savedKeys.has(key))
+    .filter(([key, record]) => !savedKeys.has(key) && inScope(record))
     .map(([key, record]) => ({ ...entry(record), reason: removalReason(key, manifest) }));
 
   // Links and files only render finds would all look gone, or all new, when one crawl ran without it.
@@ -131,21 +152,25 @@ function compareRuns(previous: PreviousRun, manifest: Manifest, current: SiteDat
       new: now.filter((file) => !beforeUrls.has(file.url)),
       removed: before.filter((file) => !nowUrls.has(file.url)),
     },
+    ...(previous.savedFiles && manifest.files ? { savedFiles: compareSavedFiles(previous.savedFiles, manifest.files) } : {}),
   };
 }
 
 /** Copies the new and changed pages to `changes/<time>/` and writes `changes.json` there, unless nothing changed. */
 async function writeChanges(outDir: string, manifest: Manifest, changes: Changes): Promise<Changes> {
-  const { pages, files } = changes;
+  const { pages, files, savedFiles } = changes;
   const lists = [pages.new, pages.changed, pages.removed, pages.unlinked, files.new, files.removed];
+  if (savedFiles) lists.push(savedFiles.new, savedFiles.changed, savedFiles.removed);
   if (lists.every((list) => list.length === 0)) return changes;
 
   const dir = `${CHANGES_DIR}/${manifest.crawledAt.slice(0, 19).replaceAll(":", "-")}Z`;
   await mkdir(join(outDir, dir), { recursive: true });
-  for (const page of [...pages.new, ...pages.changed]) {
-    const target = join(outDir, dir, page.file);
+  const copies = [...pages.new, ...pages.changed, ...(savedFiles?.new ?? []), ...(savedFiles?.changed ?? [])];
+  for (const { file } of copies) {
+    const target = join(outDir, dir, file);
     await mkdir(dirname(target), { recursive: true });
-    await copyFile(join(outDir, page.file), target);
+    // A clone where the disk supports it, so a copy of a large file takes no extra space.
+    await copyFile(join(outDir, file), target, constants.COPYFILE_FICLONE);
   }
   const written = { ...changes, dir };
   const file = { site: manifest.site, crawledAt: manifest.crawledAt, ...written };

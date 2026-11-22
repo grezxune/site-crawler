@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { isSameSite, looksLikePage, normalizeUrl, pageKey, siteDirName, siteKey, urlToFilePath } from "./urls.ts";
+import {
+  fileUrlToPath, isSameSite, looksLikePage, normalizeUrl, pageKey, siteDirName, siteKey, stripParams, urlToFilePath,
+} from "./urls.ts";
 
 function url(raw: string): URL {
   const parsed = normalizeUrl(raw);
@@ -79,8 +81,43 @@ describe("urlToFilePath", () => {
     expect(urlToFilePath(url("https://x.org/changes.html"))).toBe("changes.html");
   });
 
+  test("never saves a page inside the files folder", () => {
+    expect(urlToFilePath(url("https://x.org/files"))).toBe("files_/index.html");
+    expect(urlToFilePath(url("https://x.org/Files/forms"))).toBe("Files_/forms/index.html");
+  });
+
   test("cannot escape the output folder", () => {
     expect(urlToFilePath(url("https://x.org/%2e%2e/%2e%2e/etc/passwd"))).toBe("etc/passwd/index.html");
     expect(urlToFilePath(url("https://x.org/a%2F..%2Fb"))).toBe("a_.._b/index.html");
+  });
+});
+
+describe("saved files", () => {
+  test("mirror the URL path under files/", () => {
+    expect(fileUrlToPath(url("https://x.org/img/p/12-large_default/cue.jpg"))).toBe("files/img/p/12-large_default/cue.jpg");
+    expect(fileUrlToPath(url("https://x.org/forms/repair%20form.pdf"))).toBe("files/forms/repair_form.pdf");
+  });
+
+  test("add a hash for query strings and keep the extension", () => {
+    expect(fileUrlToPath(url("https://x.org/logo.png?v=2"))).toMatch(/^files\/logo\.[0-9a-f]{8}\.png$/);
+    expect(fileUrlToPath(url("https://x.org/download?id=7"))).toMatch(/^files\/download\.[0-9a-f]{8}$/);
+  });
+
+  test("cannot escape the files folder", () => {
+    expect(fileUrlToPath(url("https://x.org/%2e%2e/%2e%2e/etc/passwd.png"))).toBe("files/etc/passwd.png");
+    expect(fileUrlToPath(url("https://x.org/a%2F..%2Fb.pdf"))).toBe("files/a_.._b.pdf");
+  });
+});
+
+describe("stripParams", () => {
+  test("removes the named parameters and keeps the rest", () => {
+    expect(stripParams(url("https://x.org/list?order=price&page=2"), ["order"]).href).toBe("https://x.org/list?page=2");
+    expect(stripParams(url("https://x.org/list?order=price"), ["order"]).href).toBe("https://x.org/list");
+    expect(stripParams(url("https://x.org/list?page=2"), ["order"]).href).toBe("https://x.org/list?page=2");
+  });
+
+  test("leaves a URL alone when no parameter is named", () => {
+    const original = url("https://x.org/list?order=price");
+    expect(stripParams(original, [])).toBe(original);
   });
 });

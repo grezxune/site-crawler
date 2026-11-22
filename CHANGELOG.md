@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added `--save-files`. After the pages, the crawl downloads every same-site image, media file, and document the saved pages link to or load into `files/`, up to `--max-file-mb` (default 50) each. The manifest lists each file with its size, SHA-256, and validators, and the report counts them. A later crawl asks for a known file only with its `ETag` or `Last-Modified`, keeps a file with neither without a request, and lists new, changed, and removed files in `changes.json` under `savedFiles`, with copies of the new and changed files in the changes folder.
+- Added `--strip-param <name>`. It removes a query parameter, such as a sort order, from every link before it is queued, so sort copies of one list count as one page. Earlier pages saved under a stripped URL are not reported as removed.
+- Added `--ignore-selector <css>`. Elements matching it are left out when a page is compared with the earlier crawl's copy, so a block of products picked at random on every visit no longer marks every product page as changed. Links inside it are still followed.
+- A page at `/files` now saves to `files_/index.html`, so no page lands in the files folder.
+- Added `prds/save-files.md`.
+
 - Added incremental crawls. A crawl into a folder with an earlier crawl of the same site sends `If-None-Match` and `If-Modified-Since`, keeps pages the server says are not modified, and leaves pages with the same text and links unwritten. It writes `changes/<time>/` with copies of the new and changed pages and a `changes.json` that lists new, changed, and removed pages and new and removed file URLs. `--fresh` ignores the earlier crawl. The report adds a "Changes since the last crawl" section.
 - A second crawl requests every page the earlier crawl saved, even pages nothing links to anymore. Pages that no longer load are listed as removed. Pages that still load but lost every link are listed as unlinked, and the CLI, the report's findings table, and a "Pages no longer linked" table call them out.
 - The manifest records each page's `ETag`.

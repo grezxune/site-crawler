@@ -21,7 +21,10 @@ A command-line tool that crawls every page on one website, saves each page's HTM
 - Render reads file URLs from fetched JSON, not only the rendered DOM. Widgets often fetch every record and display a few.
 - Script-content signals and render files that appear on at least half the pages count as template and are reported once, not per page.
 - `HTMLRewriter` keeps one end-tag handler per element. Register every end-tag action in the single `*` handler in `src/html.ts`.
-- A crawl into a folder with an earlier crawl of the same site compares against it (`src/previous-run.ts`, `src/changes.ts`) and writes the delta to `changes/<time>/`. `urlToFilePath` keeps every page out of `changes/`.
+- A crawl into a folder with an earlier crawl of the same site compares against it (`src/previous-run.ts`, `src/changes.ts`) and writes the delta to `changes/<time>/`. `urlToFilePath` keeps every page out of `changes/` and `files/`.
+- `--save-files` (`src/save-files.ts`) writes same-site files under `files/` through `fileUrlToPath` only. A known file is asked for with its validators, or kept without a request when it has none. Files are compared by SHA-256.
+- `--ignore-selector` removes matching elements from both copies before `compareWithSaved` compares them. It never changes which links the crawl follows.
+- `--strip-param` removes query parameters from every URL before it is queued. Earlier pages saved under a stripped URL are out of scope, not removed.
 - The earlier manifest is untrusted input. Use a saved file path from it only after `isSafeFile` accepts it.
 - Render loads every page on every crawl, unchanged ones too. Script-loaded lists change while the page HTML stays the same.
 - A second crawl queues every page the earlier crawl saved. "Removed" means the page no longer loads. A page that loads but lost every link is "unlinked" and is reported apart from removed pages.
@@ -31,7 +34,8 @@ A command-line tool that crawls every page on one website, saves each page's HTM
 - With the opt-in `--render` flag, a headless browser loads each page the crawl fetches, and that page's own scripts may request other hosts, such as script CDNs, vendor APIs, and iframes. The crawler never points the browser at another host itself. The browser blocks images, fonts, media, and file links.
 - Request other hosts directly only through the opt-in `--check-links` step: one HEAD per URL, plus a 1-byte ranged GET when HEAD returns an error. Never download a whole file or crawl from there.
 - Respect `robots.txt` and `Crawl-delay` by default. Keep default request rates low.
-- Neither the crawl nor the render browser fetches file links. Render records the file URLs it finds. Save only `text/html` responses.
+- By default, neither the crawl nor the render browser fetches file links. Render records the file URLs it finds, and only `text/html` responses are saved.
+- With the opt-in `--save-files`, the crawl downloads same-site images, media, and documents after the pages, with the same workers, delay, and `robots.txt` rules, up to `--max-file-mb` each. It never downloads a file from another host or follows a redirect to one.
 
 ## Code
 - Never use `@ts-nocheck`. Fix the types.
